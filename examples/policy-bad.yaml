@@ -1,0 +1,14 @@
+# Intentionally invalid Cedar (missing commas) for scan PARSE_FAIL checks.
+apiVersion: cedar.k8s.aws/v1alpha1
+kind: Policy
+metadata:
+  name: parse-fail
+spec:
+  validation:
+    enforced: false
+  content: |
+    permit (
+      principal
+      action
+      resource
+    );

@@ -1,0 +1,67 @@
+# Copy into $XDG_CONFIG_HOME/k9s/plugins/ (snippet file) or merge under `plugins:`.
+# command: is rewritten by install.sh to the installed plugin.sh path.
+#
+# Do not scope on `policies` or `policy`. k9s inScope matches those against the
+# current view's alias set, and Kyverno Policy uses the same names. Cedar-only
+# aliases: GVR string, FQDN, and the cedarpol user alias from aliases.yaml.
+# plugin.sh still refuses any other GVR at runtime.
+cedar-format:
+  shortCut: Shift-C
+  description: Cedar format
+  scopes:
+    - cedar.k8s.aws/v1alpha1/policies
+    - policies.cedar.k8s.aws
+    - cedarpol
+  background: false
+  confirm: false
+  command: PLUGIN_SH
+  args:
+    - format
+    - $NAME
+
+cedar-check-parse:
+  shortCut: Shift-P
+  description: Cedar check-parse
+  scopes:
+    - cedar.k8s.aws/v1alpha1/policies
+    - policies.cedar.k8s.aws
+    - cedarpol
+  background: false
+  confirm: false
+  command: PLUGIN_SH
+  args:
+    - check-parse
+    - $NAME
+
+cedar-validate:
+  shortCut: Shift-V
+  description: Cedar validate
+  scopes:
+    - cedar.k8s.aws/v1alpha1/policies
+    - policies.cedar.k8s.aws
+    - cedarpol
+  background: false
+  confirm: false
+  command: PLUGIN_SH
+  args:
+    - validate
+    - $NAME
+  inputs:
+    - name: schema
+      label: Cedar schema path (or set CEDAR_SCHEMA)
+      type: string
+      required: false
+
+cedar-scan:
+  shortCut: Shift-A
+  override: true
+  description: Cedar scan (check-parse)
+  scopes:
+    - cedar.k8s.aws/v1alpha1/policies
+    - policies.cedar.k8s.aws
+    - cedarpol
+  background: false
+  confirm: false
+  command: PLUGIN_SH
+  args:
+    - scan

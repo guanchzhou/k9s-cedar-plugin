@@ -1,0 +1,4 @@
+permit (
+  principal,
+  action,
+  resource

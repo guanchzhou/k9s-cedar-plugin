@@ -1,0 +1,9 @@
+# Merge into $XDG_CONFIG_HOME/k9s/views.yaml under `views:`.
+# CRDs must use the full GVR key or k9s silently ignores the layout.
+views:
+  cedar.k8s.aws/v1alpha1/policies:
+    columns:
+      - NAME
+      - ENFORCED:.spec.validation.enforced
+      - VALMODE:.spec.validation.validationMode
+      - AGE

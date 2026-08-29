@@ -1,0 +1,8 @@
+permit (
+  principal,
+  action,
+  resource
+)
+when {
+  context.mfa
+};

@@ -1,0 +1,27 @@
+# Read-only Role for the plugin. Cluster-scoped Policy objects.
+# The CRD is an unmaintained PoC: https://github.com/cedar-policy/cedar-access-control-for-k8s
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cedar-k9s-plugin-read
+rules:
+  - apiGroups: ["cedar.k8s.aws"]
+    resources: ["policies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    resourceNames: ["policies.cedar.k8s.aws"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cedar-k9s-plugin-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cedar-k9s-plugin-read
+subjects:
+  - kind: User
+    name: REPLACE_ME
+    apiGroup: rbac.authorization.k8s.io

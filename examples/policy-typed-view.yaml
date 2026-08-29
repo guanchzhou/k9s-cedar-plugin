@@ -1,0 +1,13 @@
+apiVersion: cedar.k8s.aws/v1alpha1
+kind: Policy
+metadata:
+  name: typed-view
+spec:
+  validation:
+    enforced: false
+  content: |
+    permit (
+      principal is User,
+      action == Action::"view",
+      resource is Photo
+    );

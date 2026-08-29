@@ -1,0 +1,4 @@
+# Merge into $XDG_CONFIG_HOME/k9s/aliases.yaml under `aliases:`.
+# :policies is Kyverno Policy. Cedar Policy is a different CRD with the same plural.
+aliases:
+  cedarpol: cedar.k8s.aws/v1alpha1/policies

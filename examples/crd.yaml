@@ -1,0 +1,83 @@
+# Frozen snapshot of policies.cedar.k8s.aws from
+# https://github.com/cedar-policy/cedar-access-control-for-k8s
+# (config/crd/bases/cedar.k8s.aws_policies.yaml). Unmaintained PoC CRD.
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: policies.cedar.k8s.aws
+spec:
+  group: cedar.k8s.aws
+  names:
+    kind: Policy
+    listKind: PolicyList
+    plural: policies
+    singular: policy
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Policy is the Schema for the policies API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PolicySpec defines the desired state of Policy
+            properties:
+              content:
+                description: Content is a string representing the policy content
+                type: string
+              validation:
+                description: Validation
+                properties:
+                  enforced:
+                    default: false
+                    description: |-
+                      Enforced indicates if creation or updates to the policy require schema validation
+                      Syntax validation is always enforced.
+                    type: boolean
+                  validationMode:
+                    description: |-
+                      ValidationMode indicates which validation mode to use.
+                      A value of `strict` requires that only literals are passed to extension functions (IP, decimal, datetime), and not entity attributes.
+                      See https://docs.cedarpolicy.com/policies/validation.html#validation-benefits-of-schema for more details.
+                    enum:
+                    - strict
+                    - permissive
+                    - partial
+                    type: string
+                required:
+                - enforced
+                type: object
+            required:
+            - content
+            - validation
+            type: object
+          status:
+            description: PolicyStatus defines the observed state of Policy
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

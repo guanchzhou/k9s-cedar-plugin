@@ -1,0 +1,14 @@
+# Cluster-scoped Cedar Policy. spec.validation is required by the CRD.
+apiVersion: cedar.k8s.aws/v1alpha1
+kind: Policy
+metadata:
+  name: permit-all
+spec:
+  validation:
+    enforced: false
+  content: |
+    permit (
+      principal,
+      action,
+      resource
+    );

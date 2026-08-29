@@ -1,0 +1,5 @@
+forbid (
+  principal,
+  action,
+  resource
+);

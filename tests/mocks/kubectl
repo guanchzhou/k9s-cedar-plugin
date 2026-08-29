@@ -1,0 +1,73 @@
+#!/bin/sh
+# Fake kubectl for plugin.sh unit tests. Serves Policy spec.content from CEDAR_MOCK_DIR.
+# Supports the two calls plugin.sh makes:
+#   get policies.cedar.k8s.aws NAME -o jsonpath={.spec.content}
+#   get policies.cedar.k8s.aws -o jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}
+set -eu
+DIR="${CEDAR_MOCK_DIR:?CEDAR_MOCK_DIR is required}"
+
+jsonpath=""
+resource=""
+name=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --kubeconfig | --context)
+      shift
+      [ $# -gt 0 ] || exit 2
+      shift
+      ;;
+    get)
+      shift
+      [ $# -gt 0 ] || exit 2
+      resource=$1
+      shift
+      if [ $# -gt 0 ] && [ "$1" != "-o" ]; then
+        name=$1
+        shift
+      fi
+      ;;
+    -o)
+      shift
+      [ $# -gt 0 ] || exit 2
+      jsonpath=$1
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+case "$resource" in
+  policies.cedar.k8s.aws) ;;
+  *)
+    printf 'mock kubectl: unexpected resource %s\n' "${resource:-}" >&2
+    exit 1
+    ;;
+esac
+
+if printf '%s' "$jsonpath" | grep -q 'spec.content'; then
+  file="$DIR/${name}.cedar"
+  if [ ! -f "$file" ]; then
+    printf 'mock kubectl: no fixture %s\n' "$file" >&2
+    exit 1
+  fi
+  cat "$file"
+  exit 0
+fi
+
+if printf '%s' "$jsonpath" | grep -q 'metadata.name'; then
+  # shellcheck disable=SC2046
+  set -- "$DIR"/*.cedar
+  if [ "$1" = "$DIR/*.cedar" ]; then
+    exit 0
+  fi
+  for f in "$@"; do
+    b=$(basename "$f" .cedar)
+    printf '%s\n' "$b"
+  done
+  exit 0
+fi
+
+printf 'mock kubectl: unhandled jsonpath %s\n' "$jsonpath" >&2
+exit 1
