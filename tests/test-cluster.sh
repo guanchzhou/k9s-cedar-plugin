@@ -5,7 +5,7 @@
 # Skip unless kubectl can reach CONTEXT (default k8s-dev).
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-export CEDAR_K9S_PAUSE=0
+export CEDAR_K9S_PAUSE=0 CEDAR_K9S_STRICT=1
 CONTEXT="${CEDAR_K9S_CONTEXT:-k8s-dev}"
 LABEL="k9s-cedar-plugin-test=1"
 FAIL=0
@@ -141,6 +141,21 @@ else
   fail "cluster scan"
   cat /tmp/cedar-cl-scan.out
 fi
+
+export CEDAR_PRINCIPAL=alice CEDAR_ACTION=view CEDAR_RESOURCE=x
+if "$ROOT/plugin.sh" can-i >/tmp/cedar-cl-cani.out 2>&1; then
+  # Fixture set includes unconstrained forbid, which overrides permit (Cedar forbid-wins).
+  if grep -q '^DENY ' /tmp/cedar-cl-cani.out && grep -q 'forbid-unconstrained' /tmp/cedar-cl-cani.out; then
+    ok "cluster can-i DENY (forbid overrides)"
+  else
+    fail "cluster can-i expected DENY from forbid-unconstrained"
+    cat /tmp/cedar-cl-cani.out
+  fi
+else
+  fail "cluster can-i"
+  cat /tmp/cedar-cl-cani.out
+fi
+unset CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE
 
 NAME=$ok_name
 export NAME CEDAR_SCHEMA="$ROOT/tests/fixtures/schema/tiny.cedarschema"

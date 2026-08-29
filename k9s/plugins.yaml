@@ -1,67 +1,138 @@
-# Copy into $XDG_CONFIG_HOME/k9s/plugins/ (snippet file) or merge under `plugins:`.
-# command: is rewritten by install.sh to the installed plugin.sh path.
+# k9s 0.51 validates this file against plugins.json: a top-level `plugins:`
+# map is required. command: is rewritten by install.sh to plugin.sh.
+#
+# background: true keeps the k9s table on screen (no TUI suspend).
+# overwriteOutput: true puts plugin stdout on the k9s status line.
+# $RESOURCE_* must appear in args or k9s leaves them unset (same as $NAME).
 #
 # Do not scope on `policies` or `policy`. k9s inScope matches those against the
 # current view's alias set, and Kyverno Policy uses the same names. Cedar-only
 # aliases: GVR string, FQDN, and the cedarpol user alias from aliases.yaml.
-# plugin.sh still refuses any other GVR at runtime.
-cedar-format:
-  shortCut: Shift-C
-  description: Cedar format
-  scopes:
-    - cedar.k8s.aws/v1alpha1/policies
-    - policies.cedar.k8s.aws
-    - cedarpol
-  background: false
-  confirm: false
-  command: PLUGIN_SH
-  args:
-    - format
-    - $NAME
+# plugin.sh still refuses a *wrong* GVR at runtime; empty GVR is allowed
+# because k9s often omits it and scopes already limit the shortcut.
+#
+# inputs maxItems is 5 (k9s schema). Extra knobs stay env-only
+# (CEDAR_ENTITIES, CEDAR_SCHEMA, CEDAR_CONTEXT).
+plugins:
+  cedar-format:
+    shortCut: Shift-C
+    description: Cedar format
+    scopes:
+      - cedar.k8s.aws/v1alpha1/policies
+      - policies.cedar.k8s.aws
+      - cedarpol
+    background: true
+    overwriteOutput: true
+    confirm: false
+    command: PLUGIN_SH
+    args:
+      - format
+      - $NAME
+      - $RESOURCE_GROUP
+      - $RESOURCE_VERSION
+      - $RESOURCE_NAME
+      - $CONTEXT
 
-cedar-check-parse:
-  shortCut: Shift-P
-  description: Cedar check-parse
-  scopes:
-    - cedar.k8s.aws/v1alpha1/policies
-    - policies.cedar.k8s.aws
-    - cedarpol
-  background: false
-  confirm: false
-  command: PLUGIN_SH
-  args:
-    - check-parse
-    - $NAME
+  cedar-check-parse:
+    shortCut: Shift-P
+    description: Cedar check-parse
+    scopes:
+      - cedar.k8s.aws/v1alpha1/policies
+      - policies.cedar.k8s.aws
+      - cedarpol
+    background: true
+    overwriteOutput: true
+    confirm: false
+    command: PLUGIN_SH
+    args:
+      - check-parse
+      - $NAME
+      - $RESOURCE_GROUP
+      - $RESOURCE_VERSION
+      - $RESOURCE_NAME
+      - $CONTEXT
 
-cedar-validate:
-  shortCut: Shift-V
-  description: Cedar validate
-  scopes:
-    - cedar.k8s.aws/v1alpha1/policies
-    - policies.cedar.k8s.aws
-    - cedarpol
-  background: false
-  confirm: false
-  command: PLUGIN_SH
-  args:
-    - validate
-    - $NAME
-  inputs:
-    - name: schema
-      label: Cedar schema path (or set CEDAR_SCHEMA)
-      type: string
-      required: false
+  cedar-validate:
+    shortCut: Shift-V
+    description: Cedar validate
+    scopes:
+      - cedar.k8s.aws/v1alpha1/policies
+      - policies.cedar.k8s.aws
+      - cedarpol
+    background: true
+    overwriteOutput: true
+    confirm: false
+    command: PLUGIN_SH
+    args:
+      - validate
+      - $NAME
+      - $RESOURCE_GROUP
+      - $RESOURCE_VERSION
+      - $RESOURCE_NAME
+      - $CONTEXT
+    inputs:
+      - name: schema
+        label: Cedar schema path (or set CEDAR_SCHEMA)
+        type: string
+        required: false
 
-cedar-scan:
-  shortCut: Shift-A
-  override: true
-  description: Cedar scan (check-parse)
-  scopes:
-    - cedar.k8s.aws/v1alpha1/policies
-    - policies.cedar.k8s.aws
-    - cedarpol
-  background: false
-  confirm: false
-  command: PLUGIN_SH
-  args:
-    - scan
+  cedar-scan:
+    shortCut: Shift-A
+    override: true
+    description: Cedar scan (check-parse)
+    scopes:
+      - cedar.k8s.aws/v1alpha1/policies
+      - policies.cedar.k8s.aws
+      - cedarpol
+    background: true
+    overwriteOutput: true
+    confirm: false
+    command: PLUGIN_SH
+    args:
+      - scan
+      - $NAME
+      - $RESOURCE_GROUP
+      - $RESOURCE_VERSION
+      - $RESOURCE_NAME
+      - $CONTEXT
+
+  cedar-can-i:
+    shortCut: Shift-I
+    override: true
+    description: Cedar can-i (P do A on R)
+    scopes:
+      - cedar.k8s.aws/v1alpha1/policies
+      - policies.cedar.k8s.aws
+      - cedarpol
+    background: true
+    overwriteOutput: true
+    confirm: false
+    command: PLUGIN_SH
+    args:
+      - can-i
+      - $NAME
+      - $RESOURCE_GROUP
+      - $RESOURCE_VERSION
+      - $RESOURCE_NAME
+      - $CONTEXT
+    inputs:
+      - name: principal
+        label: "P User (alice)"
+        type: string
+        required: true
+      - name: action
+        label: "A Verb (get, list, create, or view)"
+        type: string
+        required: true
+      - name: resource
+        label: "R Resource (pods, pods/mypod, or Photo/x)"
+        type: string
+        required: true
+      - name: namespace
+        label: "Namespace (optional)"
+        type: string
+        required: false
+      - name: apigroup
+        label: "API group (optional, empty = core)"
+        type: string
+        required: false

@@ -18,9 +18,9 @@ The Kubernetes CRD comes from [cedar-access-control-for-k8s](https://github.com/
 ./install.sh
 ```
 
-Writes snippets to `$XDG_CONFIG_HOME/k9s/plugins/cedar/` and appends CRD columns to `views.yaml` if missing. Adds a `cedarpol` alias without replacing existing `aliases.yaml` entries. Existing plugins in `plugins.yaml` are left unchanged. Plugin dirs are documented at https://k9scli.io/topics/plugins/.
+Writes `$XDG_CONFIG_HOME/k9s/plugins/cedar.yaml` (plugin defs) and `plugins/cedar/plugin.sh`. Appends CRD columns to `views.yaml` if missing. Adds a `cedarpol` alias without replacing existing `aliases.yaml` entries. Existing plugins in the root `plugins.yaml` are left unchanged.
 
-Restart k9s (or re-enter the view).
+k9s 0.51 validates directory files against `plugins.json` first, so `cedar.yaml` must start with a `plugins:` map. One invalid plugin file makes k9s drop **every** plugin shortcut. After install, **quit k9s and launch it again** (`:cedarpol` is not a restart). On the Cedar table, select a Policy row, then Shift-I.
 
 ## Open Cedar, not Kyverno
 
@@ -32,7 +32,7 @@ Use one of:
 - `:policies.cedar.k8s.aws`
 - `:cedar.k8s.aws/v1alpha1/policies`
 
-Plugin shortcuts are scoped to those Cedar-only aliases, not to `policies`, so they do not appear on the Kyverno view.
+Plugin shortcuts are scoped to those Cedar-only aliases, not to `policies`, so they do not appear on the Kyverno view. They run in the background: the k9s table stays on screen. A one-line status is flashed at the bottom (`overwriteOutput`). Parse/validate failures are that status line (`parse-fail: PARSE_FAIL`), not a k9s error dialog. Details go to k9s logs. Restart k9s after install so it reloads `background: true`.
 
 | Shortcut | Action |
 |----------|--------|
@@ -40,14 +40,15 @@ Plugin shortcuts are scoped to those Cedar-only aliases, not to `policies`, so t
 | Shift-P | `cedar check-parse` |
 | Shift-V | `cedar validate` (needs `CEDAR_SCHEMA` or the schema input) |
 | Shift-A | list all Cedar Policy objects and check-parse each (max 1000, 256 KiB each). `override: true` so it wins over k9s Aliases on this view. |
+| Shift-I | Cedar can-i: `cedar authorize` against parseable Policy CRs. Prompts are **P / A / R** (user, verb, resource), like `kubectl auth can-i`. Opens a slide-style report (`Can P do A on R?`). The k9s table stays; status line is `ALLOW  alice  get  pods`. |
 
-Wrong GVR is still refused by `plugin.sh` if a shortcut is invoked off the Cedar view.
+Wrong GVR is still refused by `plugin.sh` if a shortcut is invoked off the Cedar view. Empty GVR is allowed: k9s often omits those env vars even on the Cedar view.
 
 ## Schema
 
 Validation is optional. Set `CEDAR_SCHEMA` to a `.cedarschema` file, or type the path in the Shift-V prompt. Bundled Kubernetes schemas in the upstream repo are not auto-loaded.
 
-`cedar authorize` is not wired: the CRD has no entities or request.
+Shift-I is `kubectl auth can-i` for Cedar, not Kubernetes RBAC. Prompts follow Lucas Käldström’s Cedar talks: **Can P do A on R?** Kubernetes verbs (`get`, `list`, `create`, …) plus an optional namespace become `k8s::User` / `k8s::Action` / `k8s::Resource` with RequestInfo attributes (`namespace`, `apiGroup`, `resource`). Short Cedar names (`alice`, `view`, `Photo/x`) stay `User` / `Action` / `Photo`. k9s allows at most five plugin inputs, so the dialog is user, verb, resource, namespace, API group. Put a real entity hierarchy in `CEDAR_ENTITIES` and a schema in `CEDAR_SCHEMA` if you need them. The readable result is an HTML slide written to `$TMPDIR/k9s-cedar-can-i.html` and opened beside k9s. The status flash is `ALLOW  alice  get  pods  ·  permit-all`. Unparseable CRs are skipped. This is not a relation graph and does not call `kubectl auth can-i`.
 
 ## RBAC
 

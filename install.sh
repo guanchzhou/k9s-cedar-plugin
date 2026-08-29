@@ -12,6 +12,7 @@ PLUGIN_SH="$PLUGIN_DIR/plugin.sh"
 mkdir -p "$PLUGIN_DIR" "$DEST/plugins"
 cp "$ROOT/plugin.sh" "$PLUGIN_SH"
 chmod 755 "$PLUGIN_SH"
+cp "$ROOT/cani_report.py" "$PLUGIN_DIR/cani_report.py"
 
 # k9s loads *.yaml from plugins/ (and nested dirs). Keep defs at plugins/cedar.yaml.
 sed "s|command: PLUGIN_SH|command: $PLUGIN_SH|" "$ROOT/k9s/plugins.yaml" >"$DEST/plugins/cedar.yaml"
@@ -46,4 +47,4 @@ fi
 
 printf 'Installed k9s snippets to %s\n' "$PLUGIN_DIR"
 printf 'Requires: k9s, kubectl, cedar (cedar-policy-cli). plugin.sh prepends ~/.cargo/bin if needed.\n'
-printf 'In k9s open :cedarpol (not :policies — that is Kyverno). Shortcuts: Shift-C format, Shift-P check-parse, Shift-V validate, Shift-A scan.\n'
+printf 'Quit k9s fully and launch it again. Open :cedarpol (not :policies — that is Kyverno). Select a Policy row. Shortcuts: Shift-C format, Shift-P check-parse, Shift-V validate, Shift-A scan, Shift-I can-i. Shift-I prompts P/A/R, opens a report, and flashes Allow/Deny.\n'
