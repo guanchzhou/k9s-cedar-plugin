@@ -1,0 +1,19 @@
+namespace k8s {
+  entity User = {
+    "name": __cedar::String
+  };
+
+  entity Resource = {
+    "apiGroup": __cedar::String,
+    "name"?: __cedar::String,
+    "namespace"?: __cedar::String,
+    "resource": __cedar::String,
+    "subresource"?: __cedar::String
+  };
+
+  action "get" appliesTo {
+    principal: [User],
+    resource: [Resource],
+    context: {}
+  };
+}

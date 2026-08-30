@@ -50,31 +50,40 @@ mkdir -p "$YAML"
 INDEX="$TMP/index.txt"
 trap 'cleanup; rm -rf "$TMP"' EXIT INT TERM
 
-python3 - "$ROOT" "$YAML" "$PREFIX" "$INDEX" << 'PY'
-import pathlib, sys, re
-root = pathlib.Path(sys.argv[1])
-out = pathlib.Path(sys.argv[2])
-prefix = sys.argv[3]
-index_path = pathlib.Path(sys.argv[4])
+python3 - "$YAML" "$PREFIX" "$INDEX" << 'PY'
+import pathlib, sys
+out = pathlib.Path(sys.argv[1])
+prefix = sys.argv[2]
+index_path = pathlib.Path(sys.argv[3])
 
-def name(stem: str) -> str:
-    s = re.sub(r"[^a-z0-9-]", "-", stem.lower())
-    s = re.sub(r"-+", "-", s).strip("-")
-    n = f"{prefix}-{s}"
-    return n[:63].rstrip("-")
+# These fixtures cannot affect real Kubernetes requests even if a Cedar
+# authorizer watches this cluster: they use impossible test-only principals,
+# and the malformed policy never parses.
+fixtures = [
+    ("ok", "safe", '''permit (
+  principal == k8s::User::"__k9s_cedar_plugin_test__",
+  action == k8s::Action::"get",
+  resource is k8s::Resource
+) when {
+  resource.resource == "__k9s_cedar_plugin_test__"
+};'''),
+    ("ok", "typed-view", '''permit (
+  principal is User,
+  action == Action::"view",
+  resource is Photo
+);'''),
+    ("fail", "parse-fail", '''permit (
+  principal
+  action
+  resource
+);'''),
+]
 
 manifests = []
-dirs = (("ok", "parse-ok"), ("ok", "validate-ok"), ("fail", "parse-fail"))
-seen = set()
-for kind, directory in dirs:
-    for f in sorted((root / "tests/fixtures" / directory).glob("*.cedar")):
-        cr = name(f"{kind}-{f.stem}")
-        if cr in seen:
-            continue
-        seen.add(cr)
-        content = f.read_text()
-        indented = "\n".join(("    " + line) if line else "" for line in content.splitlines())
-        yaml = f"""apiVersion: cedar.k8s.aws/v1alpha1
+for kind, suffix, content in fixtures:
+    cr = f"{prefix}-{suffix}"
+    indented = "\n".join(("    " + line) if line else "" for line in content.splitlines())
+    yaml = f"""apiVersion: cedar.k8s.aws/v1alpha1
 kind: Policy
 metadata:
   name: {cr}
@@ -86,8 +95,8 @@ spec:
   content: |
 {indented}
 """
-        (out / f"{cr}.yaml").write_text(yaml + "\n")
-        manifests.append((kind, cr))
+    (out / f"{cr}.yaml").write_text(yaml + "\n")
+    manifests.append((kind, cr))
 index_path.write_text("\n".join(f"{k} {n}" for k, n in manifests) + "\n")
 PY
 
@@ -141,21 +150,6 @@ else
   fail "cluster scan"
   cat /tmp/cedar-cl-scan.out
 fi
-
-export CEDAR_PRINCIPAL=alice CEDAR_ACTION=view CEDAR_RESOURCE=x
-if "$ROOT/plugin.sh" can-i >/tmp/cedar-cl-cani.out 2>&1; then
-  # Fixture set includes unconstrained forbid, which overrides permit (Cedar forbid-wins).
-  if grep -q '^DENY ' /tmp/cedar-cl-cani.out && grep -q 'forbid-unconstrained' /tmp/cedar-cl-cani.out; then
-    ok "cluster can-i DENY (forbid overrides)"
-  else
-    fail "cluster can-i expected DENY from forbid-unconstrained"
-    cat /tmp/cedar-cl-cani.out
-  fi
-else
-  fail "cluster can-i"
-  cat /tmp/cedar-cl-cani.out
-fi
-unset CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE
 
 NAME=$ok_name
 export NAME CEDAR_SCHEMA="$ROOT/tests/fixtures/schema/tiny.cedarschema"

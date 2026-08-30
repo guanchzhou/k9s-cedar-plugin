@@ -7,8 +7,10 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 EUID = re.compile(r'^(.+)::"(.*)"$')
@@ -52,7 +54,7 @@ def parse_determining(log: str) -> list[str]:
             break
         if stripped in ("ALLOW", "DENY"):
             break
-        names.append(stripped.split()[0].rstrip(","))
+        names.append(stripped.rstrip(","))
     return names
 
 
@@ -73,6 +75,27 @@ def load_json(path: str, default):
         return json.loads(raw)
     except json.JSONDecodeError:
         return default
+
+
+def write_atomic(path: str, content: str) -> None:
+    target = Path(path)
+    parent = target.parent
+    if not parent.is_dir():
+        raise FileNotFoundError(f"report directory does not exist: {parent}")
+    fd, temporary = tempfile.mkstemp(prefix=f".{target.name}.", dir=parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        fd = -1
+        os.replace(temporary, target)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
 
 
 def decision_word(decision: str) -> str:
@@ -134,8 +157,12 @@ def render(meta: dict) -> str:
         cells = []
         for row in matrix:
             d = (row.get("decision") or "").upper()
-            mark = "✔" if d == "ALLOW" else "✖"
-            cls = "ok" if d == "ALLOW" else "no"
+            if d == "ALLOW":
+                mark, cls = "✔", "ok"
+            elif d == "DENY":
+                mark, cls = "✖", "no"
+            else:
+                mark, cls = "?", "err"
             cells.append(f'<td class="{cls}">{mark}</td>')
         verb_cells = f"""
         <section class="panel">
@@ -282,6 +309,7 @@ def render(meta: dict) -> str:
   table.rakkess th:first-child, table.rakkess td:first-child {{ text-align: left; }}
   table.rakkess td.ok {{ color: var(--allow); font-weight: 700; }}
   table.rakkess td.no {{ color: var(--deny); font-weight: 700; }}
+  table.rakkess td.err {{ color: var(--warn); font-weight: 700; }}
   .table-wrap {{ overflow-x: auto; }}
   pre {{
     background: #070b14; border: 1px solid var(--line); border-radius: 10px;
@@ -387,7 +415,7 @@ def render(meta: dict) -> str:
 
     <section class="panel">
       <h2>Policy CRs in this request</h2>
-      <p class="lede">Parseable <code>spec.content</code> concatenated. Unparseable CRs are skipped (skip-on-error).</p>
+      <p class="lede">All <code>spec.content</code> entries passed preflight and were concatenated. Any unavailable policy makes the result indeterminate.</p>
       <ul class="crs">{cr_list}</ul>
     </section>
 
@@ -455,7 +483,7 @@ def main(argv: list[str]) -> int:
         "authorizeLog": log,
         "matrix": load_json(args.matrix_file, []),
     }
-    Path(args.out).write_text(render(meta), encoding="utf-8")
+    write_atomic(args.out, render(meta))
     return 0
 
 

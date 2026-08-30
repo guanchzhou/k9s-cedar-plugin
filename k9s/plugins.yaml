@@ -1,5 +1,5 @@
-# k9s 0.51 validates this file against plugins.json: a top-level `plugins:`
-# map is required. command: is rewritten by install.sh to plugin.sh.
+# k9s accepts this full `plugins:` map as well as unwrapped directory snippets.
+# command: is rewritten by install.sh to plugin.sh.
 #
 # background: true keeps the k9s table on screen (no TUI suspend).
 # overwriteOutput: true puts plugin stdout on the k9s status line.
@@ -12,7 +12,7 @@
 # because k9s often omits it and scopes already limit the shortcut.
 #
 # inputs maxItems is 5 (k9s schema). Extra knobs stay env-only
-# (CEDAR_ENTITIES, CEDAR_SCHEMA, CEDAR_CONTEXT).
+# (CEDAR_ENTITIES, CEDAR_SCHEMA, CEDAR_CONTEXT, CEDAR_APIVERSION).
 plugins:
   cedar-format:
     shortCut: Shift-C
@@ -70,6 +70,7 @@ plugins:
       - $RESOURCE_VERSION
       - $RESOURCE_NAME
       - $CONTEXT
+      - $INPUT_SCHEMA
     inputs:
       - name: schema
         label: Cedar schema path (or set CEDAR_SCHEMA)
@@ -115,6 +116,11 @@ plugins:
       - $RESOURCE_VERSION
       - $RESOURCE_NAME
       - $CONTEXT
+      - $INPUT_PRINCIPAL
+      - $INPUT_ACTION
+      - $INPUT_RESOURCE
+      - $INPUT_NAMESPACE
+      - $INPUT_APIGROUP
     inputs:
       - name: principal
         label: "P User (alice)"
@@ -125,7 +131,7 @@ plugins:
         type: string
         required: true
       - name: resource
-        label: "R Resource (pods, pods/mypod, or Photo/x)"
+        label: "R Resource (pods, pods/name[/subresource], or Photo/x)"
         type: string
         required: true
       - name: namespace
