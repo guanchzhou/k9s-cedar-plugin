@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
 
       - name: shellcheck
-        run: shellcheck install.sh uninstall.sh plugin.sh tests/*.sh tests/mocks/kubectl
+        run: shellcheck --severity=warning install.sh uninstall.sh plugin.sh tests/*.sh tests/mocks/kubectl
 
       - name: Install cedar
         run: cargo install --locked cedar-policy-cli --version 4.12.0

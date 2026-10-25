@@ -1,7 +1,7 @@
 #!/bin/sh
 # Offline suite: Cedar language fixtures + plugin.sh against a mock kubectl.
 set -eu
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 export CEDAR_K9S_PAUSE=0 CEDAR_K9S_STRICT=1
 FAIL=0
 FIXTURES="$ROOT/tests/fixtures"
@@ -96,7 +96,7 @@ fi
 INSTALL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cedar-install.XXXXXX")
 SPECIAL_DEST="$INSTALL_DIR/config&| #home"
 if K9S_CONFIG_DIR="$SPECIAL_DEST" "$ROOT/install.sh" >/tmp/cedar-install-special.out 2>&1; then
-  SPECIAL_DEST_REAL=$(CDPATH= cd -- "$SPECIAL_DEST" && pwd)
+  SPECIAL_DEST_REAL=$(CDPATH='' cd -- "$SPECIAL_DEST" && pwd)
 else
   SPECIAL_DEST_REAL=$SPECIAL_DEST
 fi
@@ -458,7 +458,7 @@ if require_cedar; then
   cp "$FIXTURES"/parse-ok/k8s-authz-pods.cedar "$K8S_DIR/k8s-authz-pods.cedar"
   CEDAR_MOCK_DIR="$K8S_DIR"
   CEDAR_PRINCIPAL=test-user
-  CEDAR_ACTION=get
+  CEDAR_ACTION="get"
   CEDAR_RESOURCE=pods
   CEDAR_NAMESPACE=default
   CEDAR_SCHEMA="$K8S_SCHEMA"

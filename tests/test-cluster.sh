@@ -5,7 +5,7 @@
 # Opt-in: CEDAR_K9S_CLUSTER_TESTS=1. Runs against CEDAR_K9S_CONTEXT, or a
 # kind-* context when unset, so a real cluster is never touched by default.
 set -eu
-ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
 export CEDAR_K9S_PAUSE=0 CEDAR_K9S_STRICT=1
 LABEL="k9s-cedar-plugin-test=1"
 FAIL=0

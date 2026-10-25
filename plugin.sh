@@ -5,7 +5,7 @@
 # Plugin YAML is scoped to Cedar-only aliases; :policies is Kyverno. Still GVR-guard here.
 set -eu
 
-PLUGIN_HOME=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+PLUGIN_HOME=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 
 # k9s launched from the GUI often lacks ~/.cargo/bin. Official cedar lives there.
 if [ -d "${HOME}/.cargo/bin" ]; then

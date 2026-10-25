@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname "$0")" && pwd)
 # Same lookup order as k9s itself.
 if [ -n "${K9S_CONFIG_DIR:-}" ]; then
   DEST=$K9S_CONFIG_DIR
@@ -13,7 +13,7 @@ else
   DEST="$HOME/.config/k9s"
 fi
 mkdir -p "$DEST"
-DEST=$(CDPATH= cd -- "$DEST" && pwd)
+DEST=$(CDPATH='' cd -- "$DEST" && pwd)
 DEST=$(printf '%s' "$DEST" | sed 's|//*|/|g')
 PLUGIN_DIR="$DEST/plugins/cedar"
 PLUGIN_SH="$PLUGIN_DIR/plugin.sh"
