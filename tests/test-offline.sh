@@ -130,7 +130,33 @@ else
   fail "installer mistook comment for installed view"
   cat /tmp/cedar-install-comment.out
 fi
+
+UNINSTALL_DEST="$INSTALL_DIR/uninstall"
+mkdir -p "$UNINSTALL_DEST"
+printf 'views:\n  v1/pods:\n    columns:\n      - NAME\n' >"$UNINSTALL_DEST/views.yaml"
+printf 'aliases:\n  pp: v1/pods\n' >"$UNINSTALL_DEST/aliases.yaml"
+if K9S_CONFIG_DIR="$UNINSTALL_DEST" "$ROOT/install.sh" >/tmp/cedar-uninstall.out 2>&1 && \
+   K9S_CONFIG_DIR="$UNINSTALL_DEST" "$ROOT/uninstall.sh" >>/tmp/cedar-uninstall.out 2>&1 && \
+   [ ! -e "$UNINSTALL_DEST/plugins/cedar.yaml" ] && [ ! -e "$UNINSTALL_DEST/plugins/cedar" ] && \
+   [ "$(cat "$UNINSTALL_DEST/views.yaml")" = "$(printf 'views:\n  v1/pods:\n    columns:\n      - NAME\n')" ] && \
+   [ "$(cat "$UNINSTALL_DEST/aliases.yaml")" = "$(printf 'aliases:\n  pp: v1/pods\n')" ]; then
+  ok "uninstall removes only what install added"
+else
+  fail "uninstall left Cedar entries or changed user config"
+  cat /tmp/cedar-uninstall.out
+fi
 rm -rf "$INSTALL_DIR"
+
+for limit_var in CEDAR_K9S_MAX_BYTES CEDAR_K9S_MAX_POLICIES; do
+  if env "$limit_var=12k" "$ROOT/plugin.sh" scan >/tmp/cedar-plugin-limit.out 2>&1; then
+    fail "$limit_var=12k should be rejected"
+  elif grep -q "$limit_var must be a positive integer" /tmp/cedar-plugin-limit.out; then
+    ok "plugin rejects non-integer $limit_var"
+  else
+    fail "$limit_var validation message missing"
+    cat /tmp/cedar-plugin-limit.out
+  fi
+done
 
 if PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT" python3 - <<'PY'
 from cani_report import parse_determining
@@ -728,7 +754,7 @@ EOF
   unset CEDAR_K9S_MAX_BYTES
 fi
 
-# cargo prepend: k9s GUI PATH
+# cargo append: k9s GUI PATH
 if [ -x "${HOME}/.cargo/bin/cedar" ]; then
   OLD_PATH=$PATH
   PATH="/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin"
@@ -739,14 +765,14 @@ if [ -x "${HOME}/.cargo/bin/cedar" ]; then
   NAME=x
   export RESOURCE_GROUP RESOURCE_VERSION RESOURCE_NAME NAME
   if "$ROOT/plugin.sh" format >/tmp/cedar-plugin-path.out 2>&1; then
-    fail "expected GVR guard after cargo PATH prepend"
+    fail "expected GVR guard after cargo PATH append"
   elif grep -q 'refusing GVR' /tmp/cedar-plugin-path.out; then
-    ok "cargo bin prepended (GVR guard reached)"
+    ok "cargo bin appended (GVR guard reached)"
   elif grep -q 'cedar not found' /tmp/cedar-plugin-path.out; then
-    fail "cedar still missing after cargo prepend"
+    fail "cedar still missing after cargo append"
     cat /tmp/cedar-plugin-path.out
   else
-    ok "cargo prepend (guard or kubectl failed later)"
+    ok "cargo append (guard or kubectl failed later)"
   fi
   PATH=$OLD_PATH
   export PATH

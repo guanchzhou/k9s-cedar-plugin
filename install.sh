@@ -2,7 +2,16 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-DEST="${K9S_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/k9s}"
+# Same lookup order as k9s itself.
+if [ -n "${K9S_CONFIG_DIR:-}" ]; then
+  DEST=$K9S_CONFIG_DIR
+elif [ -n "${XDG_CONFIG_HOME:-}" ]; then
+  DEST="$XDG_CONFIG_HOME/k9s"
+elif [ "$(uname -s)" = Darwin ]; then
+  DEST="$HOME/Library/Application Support/k9s"
+else
+  DEST="$HOME/.config/k9s"
+fi
 mkdir -p "$DEST"
 DEST=$(CDPATH= cd -- "$DEST" && pwd)
 DEST=$(printf '%s' "$DEST" | sed 's|//*|/|g')
@@ -55,5 +64,5 @@ else
 fi
 
 printf 'Installed k9s snippets to %s\n' "$PLUGIN_DIR"
-printf 'Requires: k9s, kubectl, cedar (cedar-policy-cli), python3. plugin.sh prepends ~/.cargo/bin if needed.\n'
+printf 'Requires: k9s, kubectl, cedar (cedar-policy-cli), python3. plugin.sh appends ~/.cargo/bin to PATH if needed.\n'
 printf 'Quit k9s fully and launch it again. Open :cedarpol (not :policies — that is Kyverno). Select a Policy row. Shortcuts: Shift-C format, Shift-P check-parse, Shift-V validate, Shift-A scan, Shift-I can-i. Shift-I prompts P/A/R, opens a report, and flashes Allow/Deny.\n'

@@ -2,17 +2,23 @@
 # Live cluster tests. Needs the Policy CRD only — not the cedar-access-control
 # webhook, controller, or in-cluster cedar binary.
 #
-# Skip unless kubectl can reach CONTEXT (default k8s-dev).
+# Opt-in: CEDAR_K9S_CLUSTER_TESTS=1. Runs against CEDAR_K9S_CONTEXT, or a
+# kind-* context when unset, so a real cluster is never touched by default.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 export CEDAR_K9S_PAUSE=0 CEDAR_K9S_STRICT=1
-CONTEXT="${CEDAR_K9S_CONTEXT:-k8s-dev}"
 LABEL="k9s-cedar-plugin-test=1"
 FAIL=0
 PREFIX="k9s-cedar-t"
+CREATED_CRD=0
 
 ok() { printf 'ok  %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
+
+if [ "${CEDAR_K9S_CLUSTER_TESTS:-0}" != "1" ]; then
+  printf 'skip cluster: set CEDAR_K9S_CLUSTER_TESTS=1 to run\n'
+  exit 0
+fi
 
 if [ -d "${HOME}/.cargo/bin" ]; then
   PATH="${HOME}/.cargo/bin:${PATH}"
@@ -27,6 +33,18 @@ if ! command -v cedar >/dev/null 2>&1; then
   printf 'skip cluster: cedar not installed\n'
   exit 0
 fi
+CONTEXT="${CEDAR_K9S_CONTEXT:-}"
+if [ -z "$CONTEXT" ]; then
+  current=$(kubectl config current-context 2>/dev/null || true)
+  case "$current" in
+    kind-*) CONTEXT=$current ;;
+    *) CONTEXT=$(kubectl config get-contexts -o name 2>/dev/null | grep '^kind-' | head -n 1 || true) ;;
+  esac
+fi
+if [ -z "$CONTEXT" ]; then
+  printf 'skip cluster: no kind-* context (set CEDAR_K9S_CONTEXT)\n'
+  exit 0
+fi
 if ! kubectl --context "$CONTEXT" get --raw=/healthz >/dev/null 2>&1; then
   printf 'skip cluster: context %s not reachable\n' "$CONTEXT"
   exit 0
@@ -34,11 +52,16 @@ fi
 
 cleanup() {
   kubectl --context "$CONTEXT" delete policies.cedar.k8s.aws -l "$LABEL" --ignore-not-found >/dev/null 2>&1 || true
+  if [ "$CREATED_CRD" -eq 1 ]; then
+    kubectl --context "$CONTEXT" delete crd policies.cedar.k8s.aws --ignore-not-found >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT INT TERM
 
 if ! kubectl --context "$CONTEXT" get crd policies.cedar.k8s.aws >/dev/null 2>&1; then
   kubectl --context "$CONTEXT" apply -f "$ROOT/examples/crd.yaml" >/dev/null
+  CREATED_CRD=1
+  kubectl --context "$CONTEXT" wait --for=condition=Established --timeout=60s crd/policies.cedar.k8s.aws >/dev/null
   ok "applied CRD snapshot"
 else
   ok "CRD already present"

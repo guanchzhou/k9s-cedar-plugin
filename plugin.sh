@@ -11,7 +11,7 @@ PLUGIN_HOME=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 if [ -d "${HOME}/.cargo/bin" ]; then
   case ":${PATH}:" in
     *:"${HOME}/.cargo/bin":*) ;;
-    *) PATH="${HOME}/.cargo/bin:${PATH}"
+    *) PATH="${PATH}:${HOME}/.cargo/bin"
        export PATH ;;
   esac
 fi
@@ -93,6 +93,12 @@ require_cmd() {
   fi
 }
 
+require_positive_int() {
+  case "$2" in
+    '' | *[!0-9]* | 0*) die "$1 must be a positive integer (got: $2)" ;;
+  esac
+}
+
 unset_or_dollar() {
   [ -z "${1:-}" ] && return 0
   case "$1" in
@@ -117,11 +123,7 @@ guard_gvr() {
 }
 
 kctl() {
-  if [ -n "${KUBECONFIG:-}" ] && [ -n "${CONTEXT:-}" ]; then
-    kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" "$@"
-  elif [ -n "${KUBECONFIG:-}" ]; then
-    kubectl --kubeconfig "$KUBECONFIG" "$@"
-  elif [ -n "${CONTEXT:-}" ]; then
+  if [ -n "${CONTEXT:-}" ]; then
     kubectl --context "$CONTEXT" "$@"
   else
     kubectl "$@"
@@ -163,19 +165,17 @@ run_format() {
   if [ -n "$format_report" ]; then
     format_dir=$(dirname "$format_report")
     [ -d "$format_dir" ] || die "format report directory not found: $format_dir"
-    formatted_tmp=$(mktemp "${format_dir}/.k9s-cedar-format.XXXXXX")
   else
-    format_report=$(mktemp "${TMPDIR:-/tmp}/k9s-cedar-format.XXXXXX")
-    formatted_tmp=$format_report
+    format_dir=$(mktemp -d "${TMPDIR:-/tmp}/k9s-cedar-format.XXXXXX")
+    format_report="$format_dir/formatted.cedar"
   fi
+  formatted_tmp=$(mktemp "${format_dir}/.k9s-cedar-format.XXXXXX")
   chmod 600 "$formatted_tmp"
   if ! cedar format --policies "$tmp" >"$formatted_tmp" 2>"$error_tmp"; then
     cat "$error_tmp" >&2
     fail_status "${NAME}: FORMAT_FAIL"
   fi
-  if [ "$formatted_tmp" != "$format_report" ]; then
-    mv -f "$formatted_tmp" "$format_report"
-  fi
+  mv -f "$formatted_tmp" "$format_report"
   formatted_tmp=""
   open_cani_report "$format_report"
   printf '%s: formatted\n' "$NAME"
@@ -627,7 +627,7 @@ run_can_i() {
       printf '%s: PARSE_FAIL\n' "$name" >&2
       continue
     fi
-    if printf '%s' "$content" | grep -q '@id('; then
+    if printf '%s' "$content" | grep -Eq '^[[:space:]]*@id\('; then
       printf '%s\n' "$content" >>"$pol"
     else
       printf '@id("%s")\n%s\n' "$name" "$content" >>"$pol"
@@ -734,8 +734,8 @@ EOF
 
   report="${CEDAR_K9S_REPORT:-}"
   if [ -z "$report" ]; then
-    report=$(mktemp "${TMPDIR:-/tmp}/k9s-cedar-can-i.XXXXXX")
-    chmod 600 "$report"
+    report_dir=$(mktemp -d "${TMPDIR:-/tmp}/k9s-cedar-can-i.XXXXXX")
+    report="$report_dir/can-i.html"
   fi
   case "$decision" in
     ALLOW | DENY)
@@ -760,6 +760,8 @@ case "$ACTION" in
     ;;
 esac
 
+require_positive_int CEDAR_K9S_MAX_BYTES "$MAX_BYTES"
+require_positive_int CEDAR_K9S_MAX_POLICIES "$MAX_POLICIES"
 guard_gvr
 require_cmd kubectl
 
