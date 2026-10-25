@@ -128,7 +128,6 @@ ok "applied fixture Policies"
 
 export RESOURCE_GROUP=cedar.k8s.aws RESOURCE_VERSION=v1alpha1 RESOURCE_NAME=policies CONTEXT
 ok_name=""
-fail_name=""
 while read -r kind cr; do
   [ -n "${kind:-}" ] || continue
   NAME=$cr
@@ -144,7 +143,6 @@ while read -r kind cr; do
       cat /tmp/cedar-cl-ok.out
     fi
   else
-    fail_name=$cr
     if "$ROOT/plugin.sh" check-parse >/tmp/cedar-cl-fail.out 2>&1; then
       fail "cluster check-parse should fail $cr"
     else
