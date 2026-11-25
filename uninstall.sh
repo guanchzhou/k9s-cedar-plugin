@@ -16,8 +16,14 @@ if [ ! -d "$DEST" ]; then
   exit 0
 fi
 
-rm -f "$DEST/plugins/cedar.yaml"
-rm -rf "$DEST/plugins/cedar"
+TMP_FILE=""
+cleanup() {
+  [ -z "$TMP_FILE" ] || rm -f -- "$TMP_FILE"
+}
+trap cleanup EXIT INT TERM
+
+rm -f -- "$DEST/plugins/cedar.yaml"
+rm -rf -- "$DEST/plugins/cedar"
 printf 'removed Cedar plugin from %s/plugins\n' "$DEST"
 
 # Only drop the exact blocks install.sh writes; anything else is left alone.
@@ -26,14 +32,15 @@ strip_file() {
   label=$2
   awk_prog=$3
   [ -f "$file" ] || return 0
-  tmp=$(mktemp "$file.XXXXXX")
-  awk "$awk_prog" "$file" >"$tmp"
-  if cmp -s "$file" "$tmp"; then
-    rm -f "$tmp"
+  TMP_FILE=$(mktemp "$file.XXXXXX")
+  awk "$awk_prog" "$file" >"$TMP_FILE"
+  if cmp -s "$file" "$TMP_FILE"; then
+    rm -f -- "$TMP_FILE"
   else
-    mv -f "$tmp" "$file"
+    mv -f -- "$TMP_FILE" "$file"
     printf 'removed %s from %s\n' "$label" "$file"
   fi
+  TMP_FILE=""
 }
 
 strip_file "$DEST/views.yaml" "Cedar columns" '

@@ -14,7 +14,6 @@ import tempfile
 from pathlib import Path
 
 EUID = re.compile(r'^(.+)::"(.*)"$')
-ID_SPLIT = re.compile(r'@id\("([^"]+)"\)')
 
 
 def esc(value: object) -> str:
@@ -58,12 +57,80 @@ def parse_determining(log: str) -> list[str]:
     return names
 
 
+def _skip_string(text: str, i: int) -> tuple[str, int]:
+    n = len(text)
+    i += 1
+    chars: list[str] = []
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt == '"':
+                chars.append('"')
+            elif nxt == "\\":
+                chars.append("\\")
+            elif nxt == "n":
+                chars.append("\n")
+            elif nxt == "r":
+                chars.append("\r")
+            elif nxt == "t":
+                chars.append("\t")
+            else:
+                chars.append(nxt)
+            i += 2
+            continue
+        if ch == '"':
+            return "".join(chars), i + 1
+        chars.append(ch)
+        i += 1
+    return "".join(chars), n
+
+
 def policy_bodies(blob: str) -> dict[str, str]:
-    parts = ID_SPLIT.split(blob or "")
+    text = blob or ""
+    n = len(text)
+    markers: list[tuple[int, int, str]] = []
+    i = 0
+    depth = 0
+    while i < n:
+        ch = text[i]
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            nl = text.find("\n", i + 2)
+            i = n if nl == -1 else nl + 1
+            continue
+        if ch == '"':
+            _, i = _skip_string(text, i)
+            continue
+        if ch in "({[":
+            depth += 1
+            i += 1
+            continue
+        if ch in ")}]":
+            depth = max(0, depth - 1)
+            i += 1
+            continue
+        if depth == 0 and ch == "@" and text.startswith("@id", i):
+            j = i + 3
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] == "(":
+                j += 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                if j < n and text[j] == '"':
+                    name, k = _skip_string(text, j)
+                    while k < n and text[k] in " \t\r\n":
+                        k += 1
+                    if k < n and text[k] == ")":
+                        markers.append((i, k + 1, name))
+                        i = k + 1
+                        continue
+        i += 1
+
     out: dict[str, str] = {}
-    it = iter(parts[1:])
-    for name, body in zip(it, it):
-        out[name] = body.strip()
+    for idx, (_start, end, name) in enumerate(markers):
+        next_start = markers[idx + 1][0] if idx + 1 < len(markers) else n
+        out[name] = text[end:next_start].strip()
     return out
 
 

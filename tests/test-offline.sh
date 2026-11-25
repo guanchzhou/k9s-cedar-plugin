@@ -9,6 +9,8 @@ SCHEMA="$FIXTURES/schema/tiny.cedarschema"
 K8S_SCHEMA="$FIXTURES/schema/k8s-authorization.cedarschema"
 K8S_GET_SCHEMA="$FIXTURES/schema/k8s-get-only.cedarschema"
 MOCK_BIN="$ROOT/tests/mocks"
+TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/cedar-offline-tests.XXXXXX")
+trap 'rm -rf -- "$TEST_TMP"' EXIT INT TERM
 
 ok() { printf 'ok  %s\n' "$1"; }
 fail() { printf 'FAIL  %s\n' "$1"; FAIL=$((FAIL + 1)); }
@@ -95,7 +97,7 @@ fi
 # --- installer: never corrupt existing YAML or special-character paths ---
 INSTALL_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cedar-install.XXXXXX")
 SPECIAL_DEST="$INSTALL_DIR/config&| #home"
-if K9S_CONFIG_DIR="$SPECIAL_DEST" "$ROOT/install.sh" >/tmp/cedar-install-special.out 2>&1; then
+if K9S_CONFIG_DIR="$SPECIAL_DEST" "$ROOT/install.sh" >"$TEST_TMP/cedar-install-special.out" 2>&1; then
   SPECIAL_DEST_REAL=$(CDPATH='' cd -- "$SPECIAL_DEST" && pwd)
 else
   SPECIAL_DEST_REAL=$SPECIAL_DEST
@@ -104,69 +106,93 @@ if grep -Fq "command: \"$SPECIAL_DEST_REAL/plugins/cedar/plugin.sh\"" "$SPECIAL_
   ok "installer escapes plugin command path"
 else
   fail "installer corrupts special-character path"
-  cat /tmp/cedar-install-special.out
+  cat "$TEST_TMP/cedar-install-special.out"
 fi
 
 COMPACT_DEST="$INSTALL_DIR/compact"
 mkdir -p "$COMPACT_DEST"
 printf 'views: {}\n' >"$COMPACT_DEST/views.yaml"
 printf 'aliases: {foo: pods}\n' >"$COMPACT_DEST/aliases.yaml"
-if K9S_CONFIG_DIR="$COMPACT_DEST" "$ROOT/install.sh" >/tmp/cedar-install-compact.out 2>&1 && \
+if K9S_CONFIG_DIR="$COMPACT_DEST" "$ROOT/install.sh" >"$TEST_TMP/cedar-install-compact.out" 2>&1 && \
    [ "$(cat "$COMPACT_DEST/views.yaml")" = "views: {}" ] && \
    [ "$(cat "$COMPACT_DEST/aliases.yaml")" = "aliases: {foo: pods}" ]; then
   ok "installer leaves unsupported compact YAML unchanged"
 else
   fail "installer corrupts compact YAML"
-  cat /tmp/cedar-install-compact.out
+  cat "$TEST_TMP/cedar-install-compact.out"
 fi
 
 COMMENT_DEST="$INSTALL_DIR/comment"
 mkdir -p "$COMMENT_DEST"
 printf 'views:\n  # cedar.k8s.aws/v1alpha1/policies is documented here\n' >"$COMMENT_DEST/views.yaml"
-if K9S_CONFIG_DIR="$COMMENT_DEST" "$ROOT/install.sh" >/tmp/cedar-install-comment.out 2>&1 && \
+if K9S_CONFIG_DIR="$COMMENT_DEST" "$ROOT/install.sh" >"$TEST_TMP/cedar-install-comment.out" 2>&1 && \
    grep -Eq '^  cedar\.k8s\.aws/v1alpha1/policies:$' "$COMMENT_DEST/views.yaml"; then
   ok "installer ignores marker text in comments"
 else
   fail "installer mistook comment for installed view"
-  cat /tmp/cedar-install-comment.out
+  cat "$TEST_TMP/cedar-install-comment.out"
 fi
 
 UNINSTALL_DEST="$INSTALL_DIR/uninstall"
 mkdir -p "$UNINSTALL_DEST"
 printf 'views:\n  v1/pods:\n    columns:\n      - NAME\n' >"$UNINSTALL_DEST/views.yaml"
 printf 'aliases:\n  pp: v1/pods\n' >"$UNINSTALL_DEST/aliases.yaml"
-if K9S_CONFIG_DIR="$UNINSTALL_DEST" "$ROOT/install.sh" >/tmp/cedar-uninstall.out 2>&1 && \
-   K9S_CONFIG_DIR="$UNINSTALL_DEST" "$ROOT/uninstall.sh" >>/tmp/cedar-uninstall.out 2>&1 && \
+if K9S_CONFIG_DIR="$UNINSTALL_DEST" "$ROOT/install.sh" >"$TEST_TMP/cedar-uninstall.out" 2>&1 && \
+   K9S_CONFIG_DIR="$UNINSTALL_DEST" "$ROOT/uninstall.sh" >>"$TEST_TMP/cedar-uninstall.out" 2>&1 && \
    [ ! -e "$UNINSTALL_DEST/plugins/cedar.yaml" ] && [ ! -e "$UNINSTALL_DEST/plugins/cedar" ] && \
    [ "$(cat "$UNINSTALL_DEST/views.yaml")" = "$(printf 'views:\n  v1/pods:\n    columns:\n      - NAME\n')" ] && \
    [ "$(cat "$UNINSTALL_DEST/aliases.yaml")" = "$(printf 'aliases:\n  pp: v1/pods\n')" ]; then
   ok "uninstall removes only what install added"
 else
   fail "uninstall left Cedar entries or changed user config"
-  cat /tmp/cedar-uninstall.out
+  cat "$TEST_TMP/cedar-uninstall.out"
 fi
 rm -rf "$INSTALL_DIR"
 
 for limit_var in CEDAR_K9S_MAX_BYTES CEDAR_K9S_MAX_POLICIES; do
-  if env "$limit_var=12k" "$ROOT/plugin.sh" scan >/tmp/cedar-plugin-limit.out 2>&1; then
+  if env "$limit_var=12k" "$ROOT/plugin.sh" scan >"$TEST_TMP/cedar-plugin-limit.out" 2>&1; then
     fail "$limit_var=12k should be rejected"
-  elif grep -q "$limit_var must be a positive integer" /tmp/cedar-plugin-limit.out; then
+  elif grep -q "$limit_var must be a positive integer" "$TEST_TMP/cedar-plugin-limit.out"; then
     ok "plugin rejects non-integer $limit_var"
   else
     fail "$limit_var validation message missing"
-    cat /tmp/cedar-plugin-limit.out
+    cat "$TEST_TMP/cedar-plugin-limit.out"
   fi
 done
 
 if PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ROOT" python3 - <<'PY'
-from cani_report import parse_determining
+from cani_report import parse_determining, policy_bodies
 log = "ALLOW\n\nnote: this decision was due to the following policies:\n  policy id with spaces\n"
-raise SystemExit(0 if parse_determining(log) == ["policy id with spaces"] else 1)
+assert parse_determining(log) == ["policy id with spaces"]
+blob = (
+    '@id("real-pol")\n'
+    '// @id("fake")\n'
+    'permit (principal, action, resource) when {\n'
+    '  resource.note == "@id(\\"str-fake\\")"\n'
+    '};\n'
+    '@id("second-pol")\n'
+    'forbid (principal, action, resource);\n'
+)
+bodies = policy_bodies(blob)
+assert "fake" not in bodies and "str-fake" not in bodies
+assert "real-pol" in bodies and "permit (principal, action, resource)" in bodies["real-pol"]
+assert "second-pol" in bodies and bodies["second-pol"] == "forbid (principal, action, resource);"
 PY
 then
-  ok "report preserves determining policy ids with spaces"
+  ok "report preserves determining policy ids and ignores fake @id in comments/strings"
 else
-  fail "report truncates determining policy ids with spaces"
+  fail "report determining policy ids or @id comment/string handling failed"
+fi
+
+DOT_DEST="$TEST_TMP/dot-views"
+mkdir -p "$DOT_DEST"
+printf 'views:\n  cedarXk8sXaws/v1alpha1/policies:\n    columns:\n      - NAME\n' >"$DOT_DEST/views.yaml"
+if K9S_CONFIG_DIR="$DOT_DEST" "$ROOT/install.sh" >"$TEST_TMP/cedar-install-dot.out" 2>&1 && \
+   grep -Eq '^  cedar\.k8s\.aws/v1alpha1/policies:$' "$DOT_DEST/views.yaml"; then
+  ok "installer escapes dots in VIEW_KEY match"
+else
+  fail "installer VIEW_KEY regex treated dot as wildcard"
+  cat "$TEST_TMP/cedar-install-dot.out"
 fi
 
 # --- GVR guard (before cedar/kubectl) ---
@@ -175,21 +201,21 @@ RESOURCE_VERSION=v1
 RESOURCE_NAME=policies
 NAME=x
 export RESOURCE_GROUP RESOURCE_VERSION RESOURCE_NAME NAME
-if "$ROOT/plugin.sh" format >/tmp/cedar-plugin-gvr.out 2>&1; then
+if "$ROOT/plugin.sh" format >"$TEST_TMP/cedar-plugin-gvr.out" 2>&1; then
   fail "GVR guard should fail"
 else
-  if grep -q 'refusing GVR' /tmp/cedar-plugin-gvr.out; then
+  if grep -q 'refusing GVR' "$TEST_TMP/cedar-plugin-gvr.out"; then
     ok "GVR guard"
   else
     fail "GVR guard message missing"
-    cat /tmp/cedar-plugin-gvr.out
+    cat "$TEST_TMP/cedar-plugin-gvr.out"
   fi
 fi
 
-if "$ROOT/plugin.sh" not-a-verb >/tmp/cedar-plugin-usage.out 2>&1; then
+if "$ROOT/plugin.sh" not-a-verb >"$TEST_TMP/cedar-plugin-usage.out" 2>&1; then
   fail "bad verb should fail"
 else
-  if grep -q 'usage:' /tmp/cedar-plugin-usage.out; then
+  if grep -q 'usage:' "$TEST_TMP/cedar-plugin-usage.out"; then
     ok "usage on bad verb"
   else
     fail "usage message missing"
@@ -237,8 +263,8 @@ if require_cedar; then
     fi
   done
 
-  MOCK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cedar-mock.XXXXXX")
-  trap 'rm -rf "$MOCK_DIR"' EXIT INT TERM
+  MOCK_DIR="$TEST_TMP/mock"
+  mkdir -p "$MOCK_DIR"
   cp "$FIXTURES"/parse-ok/permit-unconstrained.cedar "$MOCK_DIR/permit-all.cedar"
   cp "$FIXTURES"/parse-fail/missing-commas.cedar "$MOCK_DIR/parse-fail.cedar"
   cp "$FIXTURES"/validate-ok/typed-view.cedar "$MOCK_DIR/typed-view.cedar"
@@ -252,52 +278,52 @@ if require_cedar; then
   RESOURCE_NAME=policies
   NAME=""
   export RESOURCE_GROUP RESOURCE_VERSION RESOURCE_NAME NAME
-  if "$ROOT/plugin.sh" check-parse >/tmp/cedar-plugin-empty-name.out 2>&1; then
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-empty-name.out" 2>&1; then
     fail "empty NAME should fail"
   else
-    if grep -q 'NAME is empty' /tmp/cedar-plugin-empty-name.out; then
+    if grep -q 'NAME is empty' "$TEST_TMP/cedar-plugin-empty-name.out"; then
       ok "empty NAME"
     else
       fail "empty NAME message missing"
-      cat /tmp/cedar-plugin-empty-name.out
+      cat "$TEST_TMP/cedar-plugin-empty-name.out"
     fi
   fi
   NAME=""
   export NAME
-  if "$ROOT/plugin.sh" check-parse permit-all >/tmp/cedar-plugin-argv-name.out 2>&1; then
+  if "$ROOT/plugin.sh" check-parse permit-all >"$TEST_TMP/cedar-plugin-argv-name.out" 2>&1; then
     ok "plugin check-parse NAME from argv"
   else
     fail "plugin check-parse NAME from argv"
-    cat /tmp/cedar-plugin-argv-name.out
+    cat "$TEST_TMP/cedar-plugin-argv-name.out"
   fi
   NAME=permit-all
   export NAME
-  if "$ROOT/plugin.sh" check-parse >/tmp/cedar-plugin-ok.out 2>&1; then
-    if grep -q 'permit-all: parsed' /tmp/cedar-plugin-ok.out; then
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-ok.out" 2>&1; then
+    if grep -q 'permit-all: parsed' "$TEST_TMP/cedar-plugin-ok.out"; then
       ok "plugin check-parse permit-all"
     else
       fail "plugin check-parse missing status line"
-      cat /tmp/cedar-plugin-ok.out
+      cat "$TEST_TMP/cedar-plugin-ok.out"
     fi
   else
     fail "plugin check-parse permit-all"
-    cat /tmp/cedar-plugin-ok.out
+    cat "$TEST_TMP/cedar-plugin-ok.out"
   fi
-  if "$ROOT/plugin.sh" format >/tmp/cedar-plugin-fmt.out 2>&1; then
-    if grep -q 'permit' /tmp/cedar-plugin-fmt.out; then
+  if "$ROOT/plugin.sh" format >"$TEST_TMP/cedar-plugin-fmt.out" 2>&1; then
+    if grep -q 'permit' "$TEST_TMP/cedar-plugin-fmt.out"; then
       ok "plugin format permit-all"
     else
       fail "plugin format missing permit"
-      cat /tmp/cedar-plugin-fmt.out
+      cat "$TEST_TMP/cedar-plugin-fmt.out"
     fi
   else
     fail "plugin format permit-all"
-    cat /tmp/cedar-plugin-fmt.out
+    cat "$TEST_TMP/cedar-plugin-fmt.out"
   fi
 
   NAME=parse-fail
   export NAME
-  if "$ROOT/plugin.sh" check-parse >/tmp/cedar-plugin-bad.out 2>&1; then
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-bad.out" 2>&1; then
     fail "plugin check-parse parse-fail should fail"
   else
     ok "plugin check-parse parse-fail"
@@ -306,23 +332,23 @@ if require_cedar; then
   NAME=typed-view
   export NAME
   unset CEDAR_SCHEMA
-  if "$ROOT/plugin.sh" validate >/tmp/cedar-plugin-noschema.out 2>&1; then
+  if "$ROOT/plugin.sh" validate >"$TEST_TMP/cedar-plugin-noschema.out" 2>&1; then
     fail "validate without schema should fail"
   else
-    if grep -q 'no schema' /tmp/cedar-plugin-noschema.out; then
+    if grep -q 'no schema' "$TEST_TMP/cedar-plugin-noschema.out"; then
       ok "plugin validate requires schema"
     else
       fail "plugin validate missing schema message"
-      cat /tmp/cedar-plugin-noschema.out
+      cat "$TEST_TMP/cedar-plugin-noschema.out"
     fi
   fi
   CEDAR_SCHEMA="$SCHEMA"
   export CEDAR_SCHEMA
-  if "$ROOT/plugin.sh" validate >/tmp/cedar-plugin-val.out 2>&1; then
+  if "$ROOT/plugin.sh" validate >"$TEST_TMP/cedar-plugin-val.out" 2>&1; then
     ok "plugin validate typed-view"
   else
     fail "plugin validate typed-view"
-    cat /tmp/cedar-plugin-val.out
+    cat "$TEST_TMP/cedar-plugin-val.out"
   fi
   unset CEDAR_SCHEMA
 
@@ -331,25 +357,25 @@ if require_cedar; then
   NAME=""
   export NAME
   if "$ROOT/plugin.sh" validate typed-view cedar.k8s.aws v1alpha1 policies test-context "$SCHEMA" \
-      >/tmp/cedar-plugin-val-argv.out 2>&1; then
+      >"$TEST_TMP/cedar-plugin-val-argv.out" 2>&1; then
     ok "plugin validate schema from k9s argv"
   else
     fail "plugin validate schema from k9s argv"
-    cat /tmp/cedar-plugin-val-argv.out
+    cat "$TEST_TMP/cedar-plugin-val-argv.out"
   fi
   NAME=typed-view
   export NAME
 
-  if "$ROOT/plugin.sh" scan >/tmp/cedar-plugin-scan.out 2>&1; then
-    if grep -q 'permit-all' /tmp/cedar-plugin-scan.out && grep -q 'PARSE_FAIL' /tmp/cedar-plugin-scan.out; then
+  if "$ROOT/plugin.sh" scan >"$TEST_TMP/cedar-plugin-scan.out" 2>&1; then
+    if grep -q 'permit-all' "$TEST_TMP/cedar-plugin-scan.out" && grep -q 'PARSE_FAIL' "$TEST_TMP/cedar-plugin-scan.out"; then
       ok "plugin scan mixed results"
     else
       fail "plugin scan expected OK and PARSE_FAIL"
-      cat /tmp/cedar-plugin-scan.out
+      cat "$TEST_TMP/cedar-plugin-scan.out"
     fi
   else
     fail "plugin scan"
-    cat /tmp/cedar-plugin-scan.out
+    cat "$TEST_TMP/cedar-plugin-scan.out"
   fi
 
   SCAN_SKIP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cedar-scan-skip.XXXXXX")
@@ -357,13 +383,13 @@ if require_cedar; then
   CEDAR_MOCK_DIR="$SCAN_SKIP_DIR"
   CEDAR_K9S_MAX_BYTES=1
   export CEDAR_MOCK_DIR CEDAR_K9S_MAX_BYTES
-  if "$ROOT/plugin.sh" scan >/tmp/cedar-plugin-scan-incomplete.out 2>&1; then
+  if "$ROOT/plugin.sh" scan >"$TEST_TMP/cedar-plugin-scan-incomplete.out" 2>&1; then
     fail "scan must not report success when no policy was analyzed"
-  elif grep -q 'INCOMPLETE' /tmp/cedar-plugin-scan-incomplete.out; then
+  elif grep -q 'INCOMPLETE' "$TEST_TMP/cedar-plugin-scan-incomplete.out"; then
     ok "plugin scan reports skipped policies as incomplete"
   else
     fail "scan incomplete summary missing"
-    cat /tmp/cedar-plugin-scan-incomplete.out
+    cat "$TEST_TMP/cedar-plugin-scan-incomplete.out"
   fi
   unset CEDAR_K9S_MAX_BYTES
   CEDAR_MOCK_DIR="$MOCK_DIR"
@@ -375,28 +401,28 @@ if require_cedar; then
   CEDAR_MOCK_DIR="$CANI_DIR"
   export CEDAR_MOCK_DIR
   unset CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE CEDAR_NAMESPACE CEDAR_APIGROUP
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-need.out 2>&1; then
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-need.out" 2>&1; then
     fail "can-i without principal should fail"
   else
-    if grep -q 'need principal' /tmp/cedar-plugin-cani-need.out; then
+    if grep -q 'need principal' "$TEST_TMP/cedar-plugin-cani-need.out"; then
       ok "plugin can-i requires principal"
     else
       fail "plugin can-i missing principal message"
-      cat /tmp/cedar-plugin-cani-need.out
+      cat "$TEST_TMP/cedar-plugin-cani-need.out"
     fi
   fi
 
   # Shift-I's five dialog values are argv 7..11 after the k9s resource args.
-  CEDAR_K9S_REPORT=/tmp/cedar-plugin-cani.html
+  CEDAR_K9S_REPORT="$TEST_TMP/cedar-plugin-cani.html"
   export CEDAR_K9S_REPORT
   if "$ROOT/plugin.sh" can-i permit-all cedar.k8s.aws v1alpha1 policies test-context \
       alice view x '$INPUT_NAMESPACE' '$INPUT_APIGROUP' \
-      >/tmp/cedar-plugin-cani-allow.out 2>&1; then
-    if grep -q '^ALLOW ' /tmp/cedar-plugin-cani-allow.out && grep -q 'permit-all' /tmp/cedar-plugin-cani-allow.out; then
+      >"$TEST_TMP/cedar-plugin-cani-allow.out" 2>&1; then
+    if grep -q '^ALLOW ' "$TEST_TMP/cedar-plugin-cani-allow.out" && grep -q 'permit-all' "$TEST_TMP/cedar-plugin-cani-allow.out"; then
       ok "plugin can-i inputs from k9s argv"
     else
       fail "plugin can-i argv expected ALLOW from permit-all"
-      cat /tmp/cedar-plugin-cani-allow.out
+      cat "$TEST_TMP/cedar-plugin-cani-allow.out"
     fi
     if grep -q 'Can P do A on R' "$CEDAR_K9S_REPORT" && grep -q 'UserInfo' "$CEDAR_K9S_REPORT"; then
       ok "plugin can-i HTML report"
@@ -405,7 +431,7 @@ if require_cedar; then
     fi
   else
     fail "plugin can-i inputs from k9s argv"
-    cat /tmp/cedar-plugin-cani-allow.out
+    cat "$TEST_TMP/cedar-plugin-cani-allow.out"
   fi
 
   # Reports must replace, not follow, a pre-existing symlink and must not be
@@ -416,7 +442,7 @@ if require_cedar; then
   CEDAR_K9S_REPORT="$REPORT_DIR/report.html"
   export CEDAR_K9S_REPORT
   if CEDAR_PRINCIPAL=alice CEDAR_ACTION=view CEDAR_RESOURCE=x \
-      "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-report-safe.out 2>&1; then
+      "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-report-safe.out" 2>&1; then
     if [ "$(cat "$REPORT_DIR/victim")" = "do not overwrite" ] && \
        [ ! -L "$REPORT_DIR/report.html" ] && \
        grep -q 'Can P do A on R' "$REPORT_DIR/report.html" && \
@@ -428,7 +454,7 @@ if require_cedar; then
     fi
   else
     fail "plugin can-i secure report"
-    cat /tmp/cedar-plugin-report-safe.out
+    cat "$TEST_TMP/cedar-plugin-report-safe.out"
   fi
 
   # Format keeps k9s visible, so the formatted policy must be opened from a
@@ -438,7 +464,7 @@ if require_cedar; then
   export CEDAR_K9S_FORMAT_REPORT
   NAME=permit-all
   export NAME
-  if "$ROOT/plugin.sh" format >/tmp/cedar-plugin-format-report.out 2>&1; then
+  if "$ROOT/plugin.sh" format >"$TEST_TMP/cedar-plugin-format-report.out" 2>&1; then
     if grep -q 'permit' "$FORMAT_REPORT" && \
        python3 -c 'import os,sys; raise SystemExit(0 if os.stat(sys.argv[1]).st_mode & 0o077 == 0 else 1)' \
          "$FORMAT_REPORT"; then
@@ -448,7 +474,7 @@ if require_cedar; then
     fi
   else
     fail "plugin format visible result"
-    cat /tmp/cedar-plugin-format-report.out
+    cat "$TEST_TMP/cedar-plugin-format-report.out"
   fi
   unset CEDAR_K9S_FORMAT_REPORT
 
@@ -462,19 +488,19 @@ if require_cedar; then
   CEDAR_RESOURCE=pods
   CEDAR_NAMESPACE=default
   CEDAR_SCHEMA="$K8S_SCHEMA"
-  CEDAR_K9S_REPORT=/tmp/cedar-plugin-cani-k8s.html
+  CEDAR_K9S_REPORT="$TEST_TMP/cedar-plugin-cani-k8s.html"
   export CEDAR_MOCK_DIR CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE CEDAR_NAMESPACE CEDAR_SCHEMA CEDAR_K9S_REPORT
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-k8s.out 2>&1; then
-    if grep -q '^ALLOW ' /tmp/cedar-plugin-cani-k8s.out && \
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-k8s.out" 2>&1; then
+    if grep -q '^ALLOW ' "$TEST_TMP/cedar-plugin-cani-k8s.out" && \
        grep -q 'k8s::Resource::&quot;/api/v1/namespaces/default/pods&quot;' "$CEDAR_K9S_REPORT"; then
       ok "plugin can-i frozen-PoC k8s mapping"
     else
       fail "plugin can-i frozen-PoC k8s mapping or canonical resource UID"
-      cat /tmp/cedar-plugin-cani-k8s.out
+      cat "$TEST_TMP/cedar-plugin-cani-k8s.out"
     fi
   else
     fail "plugin can-i frozen-PoC k8s schema"
-    cat /tmp/cedar-plugin-cani-k8s.out
+    cat "$TEST_TMP/cedar-plugin-cani-k8s.out"
   fi
 
   MATRIX_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cedar-cani-matrix.XXXXXX")
@@ -492,12 +518,12 @@ EOF
   CEDAR_SCHEMA="$K8S_GET_SCHEMA"
   CEDAR_K9S_REPORT="$MATRIX_DIR/report.html"
   export CEDAR_MOCK_DIR CEDAR_SCHEMA CEDAR_K9S_REPORT
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-matrix.out 2>&1 && \
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-matrix.out" 2>&1 && \
      grep -q 'class="err">?</td>' "$CEDAR_K9S_REPORT"; then
     ok "plugin can-i matrix applies schema and marks unsupported verbs"
   else
     fail "plugin can-i matrix ignored schema"
-    cat /tmp/cedar-plugin-cani-matrix.out
+    cat "$TEST_TMP/cedar-plugin-cani-matrix.out"
   fi
 
   MATRIX_ERROR_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cedar-cani-matrix-error.XXXXXX")
@@ -515,12 +541,12 @@ EOF
   CEDAR_K9S_REPORT="$MATRIX_ERROR_DIR/report.html"
   unset CEDAR_SCHEMA
   export CEDAR_MOCK_DIR CEDAR_K9S_REPORT
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-matrix-error.out 2>&1 && \
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-matrix-error.out" 2>&1 && \
      grep -q 'class="err">?</td>' "$CEDAR_K9S_REPORT"; then
     ok "plugin can-i matrix rejects ALLOW with evaluation errors"
   else
     fail "plugin can-i matrix treated evaluation error as ALLOW"
-    cat /tmp/cedar-plugin-cani-matrix-error.out
+    cat "$TEST_TMP/cedar-plugin-cani-matrix-error.out"
   fi
 
   CEDAR_MOCK_DIR="$CANI_DIR"
@@ -530,12 +556,12 @@ EOF
   for verb in use attest; do
     if "$ROOT/plugin.sh" can-i permit-all cedar.k8s.aws v1alpha1 policies test-context \
         test-user "$verb" pods '$INPUT_NAMESPACE' '$INPUT_APIGROUP' \
-        >/tmp/cedar-plugin-cani-verb.out 2>&1 && \
+        >"$TEST_TMP/cedar-plugin-cani-verb.out" 2>&1 && \
        grep -q "k8s::Action::&quot;${verb}&quot;" "$CEDAR_K9S_REPORT"; then
       ok "plugin can-i maps Kubernetes verb $verb"
     else
       fail "plugin can-i routed Kubernetes verb $verb to generic model"
-      cat /tmp/cedar-plugin-cani-verb.out
+      cat "$TEST_TMP/cedar-plugin-cani-verb.out"
     fi
   done
 
@@ -562,12 +588,12 @@ PY
   CEDAR_ENTITIES="$GROUP_DIR/entities.json"
   CEDAR_SCHEMA="$K8S_SCHEMA"
   export CEDAR_MOCK_DIR CEDAR_ENTITIES CEDAR_SCHEMA
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-group.out 2>&1 && \
-     grep -q '^ALLOW ' /tmp/cedar-plugin-cani-group.out; then
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-group.out" 2>&1 && \
+     grep -q '^ALLOW ' "$TEST_TMP/cedar-plugin-cani-group.out"; then
     ok "plugin can-i merges hierarchy with request entities"
   else
     fail "plugin can-i hierarchy merge"
-    cat /tmp/cedar-plugin-cani-group.out
+    cat "$TEST_TMP/cedar-plugin-cani-group.out"
   fi
   unset CEDAR_ENTITIES
 
@@ -583,13 +609,13 @@ EOF
   CEDAR_MOCK_DIR="$EVAL_DIR"
   unset CEDAR_SCHEMA
   export CEDAR_MOCK_DIR
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-eval.out 2>&1; then
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-eval.out" 2>&1; then
     fail "can-i must reject policy evaluation errors"
-  elif grep -q 'INDETERMINATE' /tmp/cedar-plugin-cani-eval.out; then
+  elif grep -q 'INDETERMINATE' "$TEST_TMP/cedar-plugin-cani-eval.out"; then
     ok "plugin can-i fails closed on evaluation error"
   else
     fail "can-i evaluation error message missing"
-    cat /tmp/cedar-plugin-cani-eval.out
+    cat "$TEST_TMP/cedar-plugin-cani-eval.out"
   fi
 
   # An incomplete policy set is not authoritative. Never emit ALLOW after a
@@ -603,13 +629,13 @@ EOF
   CEDAR_RESOURCE=x
   unset CEDAR_NAMESPACE CEDAR_SCHEMA
   export CEDAR_MOCK_DIR CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-incomplete.out 2>&1; then
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-incomplete.out" 2>&1; then
     fail "can-i must reject an incomplete policy set"
-  elif grep -q 'INDETERMINATE' /tmp/cedar-plugin-cani-incomplete.out; then
+  elif grep -q 'INDETERMINATE' "$TEST_TMP/cedar-plugin-cani-incomplete.out"; then
     ok "plugin can-i fails closed on skipped policy"
   else
     fail "can-i incomplete policy message missing"
-    cat /tmp/cedar-plugin-cani-incomplete.out
+    cat "$TEST_TMP/cedar-plugin-cani-incomplete.out"
   fi
 
   LIMIT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cedar-cani-limit.XXXXXX")
@@ -618,22 +644,22 @@ EOF
   CEDAR_MOCK_DIR="$LIMIT_DIR"
   CEDAR_K9S_MAX_POLICIES=1
   export CEDAR_MOCK_DIR CEDAR_K9S_MAX_POLICIES
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-limit.out 2>&1; then
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-limit.out" 2>&1; then
     fail "can-i must reject policy-limit truncation"
-  elif grep -q 'INDETERMINATE' /tmp/cedar-plugin-cani-limit.out; then
+  elif grep -q 'INDETERMINATE' "$TEST_TMP/cedar-plugin-cani-limit.out"; then
     ok "plugin can-i fails closed on policy limit"
   else
     fail "can-i policy-limit message missing"
-    cat /tmp/cedar-plugin-cani-limit.out
+    cat "$TEST_TMP/cedar-plugin-cani-limit.out"
   fi
   unset CEDAR_K9S_MAX_POLICIES
 
   CEDAR_MOCK_DIR="$CANI_DIR"
   CEDAR_ENTITIES="$CANI_DIR/missing-entities.json"
   export CEDAR_MOCK_DIR CEDAR_ENTITIES
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-missing-entities.out 2>&1; then
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-missing-entities.out" 2>&1; then
     fail "can-i must reject missing entities file"
-  elif grep -q 'entities file not found' /tmp/cedar-plugin-cani-missing-entities.out; then
+  elif grep -q 'entities file not found' "$TEST_TMP/cedar-plugin-cani-missing-entities.out"; then
     ok "plugin can-i rejects missing entities file"
   else
     fail "can-i missing entities message missing"
@@ -642,9 +668,9 @@ EOF
 
   CEDAR_CONTEXT="$CANI_DIR/missing-context.json"
   export CEDAR_CONTEXT
-  if "$ROOT/plugin.sh" can-i >/tmp/cedar-plugin-cani-missing-context.out 2>&1; then
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-cani-missing-context.out" 2>&1; then
     fail "can-i must reject missing context file"
-  elif grep -q 'context file not found' /tmp/cedar-plugin-cani-missing-context.out; then
+  elif grep -q 'context file not found' "$TEST_TMP/cedar-plugin-cani-missing-context.out"; then
     ok "plugin can-i rejects missing context file"
   else
     fail "can-i missing context message missing"
@@ -661,46 +687,46 @@ EOF
   NAME=permit-all
   export NAME
   unset RESOURCE_GROUP RESOURCE_VERSION RESOURCE_NAME
-  if "$ROOT/plugin.sh" check-parse >/tmp/cedar-plugin-empty-gvr.out 2>&1; then
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-empty-gvr.out" 2>&1; then
     ok "empty GVR skipped"
   else
     fail "empty GVR should skip guard"
-    cat /tmp/cedar-plugin-empty-gvr.out
+    cat "$TEST_TMP/cedar-plugin-empty-gvr.out"
   fi
   NAME=""
   export NAME
-  if "$ROOT/plugin.sh" check-parse permit-all cedar.k8s.aws v1alpha1 policies >/tmp/cedar-plugin-argv-gvr.out 2>&1; then
+  if "$ROOT/plugin.sh" check-parse permit-all cedar.k8s.aws v1alpha1 policies >"$TEST_TMP/cedar-plugin-argv-gvr.out" 2>&1; then
     ok "GVR from argv"
   else
     fail "GVR from argv"
-    cat /tmp/cedar-plugin-argv-gvr.out
+    cat "$TEST_TMP/cedar-plugin-argv-gvr.out"
   fi
-  if "$ROOT/plugin.sh" format x example.com v1 policies >/tmp/cedar-plugin-argv-bad-gvr.out 2>&1; then
+  if "$ROOT/plugin.sh" format x example.com v1 policies >"$TEST_TMP/cedar-plugin-argv-bad-gvr.out" 2>&1; then
     fail "wrong argv GVR should fail"
   else
-    if grep -q 'refusing GVR' /tmp/cedar-plugin-argv-bad-gvr.out; then
+    if grep -q 'refusing GVR' "$TEST_TMP/cedar-plugin-argv-bad-gvr.out"; then
       ok "wrong argv GVR refused"
     else
       fail "wrong argv GVR message missing"
-      cat /tmp/cedar-plugin-argv-bad-gvr.out
+      cat "$TEST_TMP/cedar-plugin-argv-bad-gvr.out"
     fi
   fi
   if "$ROOT/plugin.sh" format permit-all cedar.k8s.aws v1alpha1 widgets \
-      >/tmp/cedar-plugin-argv-bad-resource.out 2>&1; then
+      >"$TEST_TMP/cedar-plugin-argv-bad-resource.out" 2>&1; then
     fail "wrong argv resource should fail"
-  elif grep -q 'refusing GVR' /tmp/cedar-plugin-argv-bad-resource.out; then
+  elif grep -q 'refusing GVR' "$TEST_TMP/cedar-plugin-argv-bad-resource.out"; then
     ok "wrong argv resource refused"
   else
     fail "wrong argv resource message missing"
-    cat /tmp/cedar-plugin-argv-bad-resource.out
+    cat "$TEST_TMP/cedar-plugin-argv-bad-resource.out"
   fi
   NAME=""
   export NAME
-  if "$ROOT/plugin.sh" check-parse permit-all '$RESOURCE_GROUP' '$RESOURCE_VERSION' '$RESOURCE_NAME' >/tmp/cedar-plugin-dollar-gvr.out 2>&1; then
+  if "$ROOT/plugin.sh" check-parse permit-all '$RESOURCE_GROUP' '$RESOURCE_VERSION' '$RESOURCE_NAME' >"$TEST_TMP/cedar-plugin-dollar-gvr.out" 2>&1; then
     ok "uninterpolated \$RESOURCE_* skipped"
   else
     fail "uninterpolated \$RESOURCE_* should skip guard"
-    cat /tmp/cedar-plugin-dollar-gvr.out
+    cat "$TEST_TMP/cedar-plugin-dollar-gvr.out"
   fi
   RESOURCE_GROUP=cedar.k8s.aws
   RESOURCE_VERSION=v1alpha1
@@ -710,29 +736,29 @@ EOF
   NAME=parse-fail
   export NAME
   unset CEDAR_K9S_STRICT
-  if "$ROOT/plugin.sh" check-parse >/tmp/cedar-plugin-k9s-exit.out 2>&1; then
-    if grep -q 'PARSE_FAIL' /tmp/cedar-plugin-k9s-exit.out; then
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-k9s-exit.out" 2>&1; then
+    if grep -q 'PARSE_FAIL' "$TEST_TMP/cedar-plugin-k9s-exit.out"; then
       ok "k9s mode PARSE_FAIL exits 0"
     else
       fail "k9s mode missing PARSE_FAIL status"
-      cat /tmp/cedar-plugin-k9s-exit.out
+      cat "$TEST_TMP/cedar-plugin-k9s-exit.out"
     fi
   else
     fail "k9s mode should not exit 1 (Ruroh dialog)"
-    cat /tmp/cedar-plugin-k9s-exit.out
+    cat "$TEST_TMP/cedar-plugin-k9s-exit.out"
   fi
   NAME=missing
   export NAME
-  if "$ROOT/plugin.sh" check-parse >/tmp/cedar-plugin-k9s-fetch.out 2>&1; then
-    if grep -q 'FETCH_ERROR' /tmp/cedar-plugin-k9s-fetch.out; then
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-k9s-fetch.out" 2>&1; then
+    if grep -q 'FETCH_ERROR' "$TEST_TMP/cedar-plugin-k9s-fetch.out"; then
       ok "k9s mode fetch failure exits 0 with status"
     else
       fail "k9s mode fetch failure status missing"
-      cat /tmp/cedar-plugin-k9s-fetch.out
+      cat "$TEST_TMP/cedar-plugin-k9s-fetch.out"
     fi
   else
     fail "k9s mode fetch failure should not exit nonzero"
-    cat /tmp/cedar-plugin-k9s-fetch.out
+    cat "$TEST_TMP/cedar-plugin-k9s-fetch.out"
   fi
   CEDAR_K9S_STRICT=1
   export CEDAR_K9S_STRICT
@@ -741,17 +767,149 @@ EOF
   export NAME
   CEDAR_K9S_MAX_BYTES=50
   export CEDAR_K9S_MAX_BYTES
-  if "$ROOT/plugin.sh" check-parse >/tmp/cedar-plugin-big.out 2>&1; then
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-big.out" 2>&1; then
     fail "oversized policy should fail"
   else
-    if grep -q 'policy source is' /tmp/cedar-plugin-big.out; then
+    if grep -q 'policy source is' "$TEST_TMP/cedar-plugin-big.out"; then
       ok "plugin size limit"
     else
       fail "plugin size limit message missing"
-      cat /tmp/cedar-plugin-big.out
+      cat "$TEST_TMP/cedar-plugin-big.out"
     fi
   fi
   unset CEDAR_K9S_MAX_BYTES
+
+  # --- Regression: k8s::Resource EUID keeps k8s mode and populates attributes ---
+  K8S_EUID_DIR="$TEST_TMP/cani-k8s-euid"
+  mkdir -p "$K8S_EUID_DIR"
+  cp "$FIXTURES"/parse-ok/permit-unconstrained.cedar "$K8S_EUID_DIR/00-permit.cedar"
+  cat >"$K8S_EUID_DIR/99-forbid-ks.cedar" <<'EOF'
+forbid (
+  principal,
+  action,
+  resource is k8s::Resource
+) when {
+  resource.namespace == "kube-system"
+};
+EOF
+  CEDAR_MOCK_DIR="$K8S_EUID_DIR"
+  CEDAR_PRINCIPAL=alice
+  CEDAR_ACTION=get
+  CEDAR_RESOURCE='k8s::Resource::"/api/v1/namespaces/kube-system/secrets"'
+  CEDAR_K9S_REPORT="$TEST_TMP/cani-k8s-euid.html"
+  unset CEDAR_NAMESPACE CEDAR_APIGROUP CEDAR_SCHEMA
+  export CEDAR_MOCK_DIR CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE CEDAR_K9S_REPORT
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-k8s-euid.out" 2>&1 && \
+     grep -q '^DENY ' "$TEST_TMP/cedar-plugin-k8s-euid.out" && \
+     grep -q 'k8s request' "$CEDAR_K9S_REPORT"; then
+    ok "plugin can-i keeps k8s mode for k8s::Resource and enforces namespace forbid"
+  else
+    fail "plugin can-i bypassed forbid on k8s::Resource EUID"
+    cat "$TEST_TMP/cedar-plugin-k8s-euid.out"
+  fi
+
+  # --- Regression: // @id("fake") comment does not hijack report attribution ---
+  FAKE_ID_DIR="$TEST_TMP/cani-fake-id"
+  mkdir -p "$FAKE_ID_DIR"
+  cat >"$FAKE_ID_DIR/real-pol.cedar" <<'EOF'
+// @id("fake")
+permit (
+  principal,
+  action,
+  resource
+) when {
+  resource.resource == "pods" || resource.resource == "@id(\"str-fake\")"
+};
+EOF
+  CEDAR_MOCK_DIR="$FAKE_ID_DIR"
+  CEDAR_PRINCIPAL=alice
+  CEDAR_ACTION=get
+  CEDAR_RESOURCE=pods
+  CEDAR_K9S_REPORT="$TEST_TMP/cani-fake-id.html"
+  export CEDAR_MOCK_DIR CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE CEDAR_K9S_REPORT
+  if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-fake-id.out" 2>&1 && \
+     grep -q '^ALLOW ' "$TEST_TMP/cedar-plugin-fake-id.out" && \
+     grep -q '<h3>@id("real-pol")</h3>' "$CEDAR_K9S_REPORT" && \
+     grep -q 'permit (' "$CEDAR_K9S_REPORT" && \
+     ! grep -q '<h3>@id("fake")</h3>' "$CEDAR_K9S_REPORT"; then
+    ok "plugin can-i report ignores // @id(\"fake\") comments"
+  else
+    fail "plugin can-i report mishandled // @id(\"fake\") comment"
+    cat "$TEST_TMP/cedar-plugin-fake-id.out"
+  fi
+
+  # --- Regression: separate stderr fail-closed on cedar authorize ---
+  REAL_CEDAR=$(command -v cedar)
+  STDERR_BIN="$TEST_TMP/stderr-bin"
+  mkdir -p "$STDERR_BIN"
+  cat >"$STDERR_BIN/cedar" <<EOF
+#!/bin/sh
+if [ "\${1:-}" = "authorize" ]; then
+  printf 'ALLOW\n'
+  printf 'simulated diagnostic on stderr\n' >&2
+  exit 0
+fi
+exec "$REAL_CEDAR" "\$@"
+EOF
+  chmod 755 "$STDERR_BIN/cedar"
+  if PATH="$STDERR_BIN:$PATH" "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-stderr.out" 2>&1; then
+    fail "can-i must fail closed when cedar authorize writes to stderr"
+  elif grep -q 'INDETERMINATE' "$TEST_TMP/cedar-plugin-stderr.out"; then
+    ok "plugin can-i fails closed on non-empty cedar authorize stderr"
+  else
+    fail "can-i stderr fail-closed message missing"
+    cat "$TEST_TMP/cedar-plugin-stderr.out"
+  fi
+
+  # --- Regression: dash-prefixed args, directory format target, and log hardening ---
+  DASH_DIR="$TEST_TMP/dash-mock"
+  mkdir -p "$DASH_DIR"
+  cp "$FIXTURES"/parse-ok/permit-unconstrained.cedar "$DASH_DIR/-dash-pol.cedar"
+  CEDAR_MOCK_DIR="$DASH_DIR"
+  NAME="-dash-pol"
+  CONTEXT="-dash-ctx"
+  export CEDAR_MOCK_DIR NAME CONTEXT
+  if "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-dash.out" 2>&1 && \
+     grep -q -- '-dash-pol: parsed' "$TEST_TMP/cedar-plugin-dash.out"; then
+    ok "plugin handles leading-dash NAME and CONTEXT"
+  else
+    fail "plugin rejected leading-dash NAME or CONTEXT"
+    cat "$TEST_TMP/cedar-plugin-dash.out"
+  fi
+
+  if CEDAR_K9S_FORMAT_REPORT="$TEST_TMP" "$ROOT/plugin.sh" format >"$TEST_TMP/cedar-plugin-fmt-dir.out" 2>&1; then
+    fail "format must reject a directory CEDAR_K9S_FORMAT_REPORT"
+  elif grep -q 'is a directory' "$TEST_TMP/cedar-plugin-fmt-dir.out"; then
+    ok "plugin format rejects directory report path"
+  else
+    fail "format directory rejection message missing"
+    cat "$TEST_TMP/cedar-plugin-fmt-dir.out"
+  fi
+
+  LOG_VICTIM="$TEST_TMP/log-victim"
+  printf 'untouched\n' >"$LOG_VICTIM"
+  ln -s "$LOG_VICTIM" "$TEST_TMP/log-link"
+  if CEDAR_K9S_LOG="$TEST_TMP/log-link" "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-log-link.out" 2>&1 && \
+     [ "$(cat "$LOG_VICTIM")" = "untouched" ]; then
+    ok "plugin refuses to write CEDAR_K9S_LOG symlink"
+  else
+    fail "plugin wrote through CEDAR_K9S_LOG symlink"
+    cat "$TEST_TMP/cedar-plugin-log-link.out"
+  fi
+
+  NL_CTX=$(printf 'ctx\nFORGED_LINE')
+  LOG_CLEAN="$TEST_TMP/clean.log"
+  if CONTEXT="$NL_CTX" CEDAR_K9S_LOG="$LOG_CLEAN" "$ROOT/plugin.sh" check-parse >"$TEST_TMP/cedar-plugin-log-nl.out" 2>&1 && \
+     [ "$(wc -l <"$LOG_CLEAN" | tr -d ' ')" -eq 1 ]; then
+    ok "plugin sanitizes newlines in CEDAR_K9S_LOG"
+  else
+    fail "plugin allowed newline injection into CEDAR_K9S_LOG"
+    cat "$TEST_TMP/cedar-plugin-log-nl.out"
+  fi
+
+  unset CONTEXT CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE CEDAR_K9S_REPORT
+  CEDAR_MOCK_DIR="$MOCK_DIR"
+  export CEDAR_MOCK_DIR
 fi
 
 # cargo append: k9s GUI PATH
@@ -764,13 +922,13 @@ if [ -x "${HOME}/.cargo/bin/cedar" ]; then
   RESOURCE_NAME=policies
   NAME=x
   export RESOURCE_GROUP RESOURCE_VERSION RESOURCE_NAME NAME
-  if "$ROOT/plugin.sh" format >/tmp/cedar-plugin-path.out 2>&1; then
+  if "$ROOT/plugin.sh" format >"$TEST_TMP/cedar-plugin-path.out" 2>&1; then
     fail "expected GVR guard after cargo PATH append"
-  elif grep -q 'refusing GVR' /tmp/cedar-plugin-path.out; then
+  elif grep -q 'refusing GVR' "$TEST_TMP/cedar-plugin-path.out"; then
     ok "cargo bin appended (GVR guard reached)"
-  elif grep -q 'cedar not found' /tmp/cedar-plugin-path.out; then
+  elif grep -q 'cedar not found' "$TEST_TMP/cedar-plugin-path.out"; then
     fail "cedar still missing after cargo append"
-    cat /tmp/cedar-plugin-path.out
+    cat "$TEST_TMP/cedar-plugin-path.out"
   else
     ok "cargo append (guard or kubectl failed later)"
   fi

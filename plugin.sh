@@ -57,10 +57,15 @@ if [ -z "${CONTEXT:-}" ] && usable "${6:-}"; then
 fi
 
 if [ -n "${CEDAR_K9S_LOG:-}" ]; then
-  printf '%s action=%s name=%s gvr=%s/%s/%s context=%s\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${1:-}" "${NAME:-}" \
-    "${RESOURCE_GROUP:-}" "${RESOURCE_VERSION:-}" "${RESOURCE_NAME:-}" \
-    "${CONTEXT:-}" >>"$CEDAR_K9S_LOG"
+  if [ -L "$CEDAR_K9S_LOG" ] || [ -d "$CEDAR_K9S_LOG" ]; then
+    printf 'warning: refusing to write log to symlink or directory: %s\n' "$CEDAR_K9S_LOG" >&2
+  else
+    log_line=$(printf '%s action=%s name=%s gvr=%s/%s/%s context=%s' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${1:-}" "${NAME:-}" \
+      "${RESOURCE_GROUP:-}" "${RESOURCE_VERSION:-}" "${RESOURCE_NAME:-}" \
+      "${CONTEXT:-}" | tr '[:cntrl:]' ' ')
+    printf '%s\n' "$log_line" >>"$CEDAR_K9S_LOG"
+  fi
 fi
 
 pause() {
@@ -124,7 +129,7 @@ guard_gvr() {
 
 kctl() {
   if [ -n "${CONTEXT:-}" ]; then
-    kubectl --context "$CONTEXT" "$@"
+    kubectl --context="$CONTEXT" "$@"
   else
     kubectl "$@"
   fi
@@ -142,7 +147,7 @@ write_content() {
 
 fetch_content() {
   name=$1
-  kctl get "policies.${EXPECTED_GROUP}" "$name" -o jsonpath='{.spec.content}'
+  kctl get "policies.${EXPECTED_GROUP}" -o jsonpath='{.spec.content}' -- "$name"
 }
 
 run_format() {
@@ -152,10 +157,11 @@ run_format() {
   formatted_tmp=""
   error_tmp=$(mktemp "${TMPDIR:-/tmp}/cedar-format-error.XXXXXX")
   cleanup_format() {
-    rm -f "$tmp" "$formatted_tmp" "$error_tmp"
+    rm -f -- "$tmp" "$error_tmp"
+    [ -z "$formatted_tmp" ] || rm -f -- "$formatted_tmp"
   }
   trap cleanup_format EXIT INT TERM
-  chmod 600 "$tmp"
+  chmod -- 600 "$tmp"
   if ! content=$(fetch_content "$NAME"); then
     fail_status "${NAME}: FETCH_ERROR"
   fi
@@ -163,19 +169,20 @@ run_format() {
 
   format_report="${CEDAR_K9S_FORMAT_REPORT:-}"
   if [ -n "$format_report" ]; then
-    format_dir=$(dirname "$format_report")
+    [ ! -d "$format_report" ] || die "format report path is a directory: $format_report"
+    format_dir=$(dirname -- "$format_report")
     [ -d "$format_dir" ] || die "format report directory not found: $format_dir"
   else
     format_dir=$(mktemp -d "${TMPDIR:-/tmp}/k9s-cedar-format.XXXXXX")
     format_report="$format_dir/formatted.cedar"
   fi
   formatted_tmp=$(mktemp "${format_dir}/.k9s-cedar-format.XXXXXX")
-  chmod 600 "$formatted_tmp"
-  if ! cedar format --policies "$tmp" >"$formatted_tmp" 2>"$error_tmp"; then
-    cat "$error_tmp" >&2
+  chmod -- 600 "$formatted_tmp"
+  if ! cedar format --policies="$tmp" >"$formatted_tmp" 2>"$error_tmp"; then
+    cat -- "$error_tmp" >&2
     fail_status "${NAME}: FORMAT_FAIL"
   fi
-  mv -f "$formatted_tmp" "$format_report"
+  mv -f -- "$formatted_tmp" "$format_report"
   formatted_tmp=""
   open_cani_report "$format_report"
   printf '%s: formatted\n' "$NAME"
@@ -185,13 +192,13 @@ run_check_parse() {
   require_cmd cedar
   [ -n "${NAME:-}" ] || die "NAME is empty"
   tmp=$(mktemp "${TMPDIR:-/tmp}/cedar-policy.XXXXXX")
-  trap 'rm -f "$tmp"' EXIT INT TERM
-  chmod 600 "$tmp"
+  trap 'rm -f -- "$tmp"' EXIT INT TERM
+  chmod -- 600 "$tmp"
   if ! content=$(fetch_content "$NAME"); then
     fail_status "${NAME}: FETCH_ERROR"
   fi
   write_content "$tmp" "$content"
-  if cedar check-parse --policies "$tmp" >&2; then
+  if cedar check-parse --policies="$tmp" >&2; then
     printf '%s: parsed\n' "$NAME"
   else
     fail_status "${NAME}: PARSE_FAIL"
@@ -210,14 +217,14 @@ run_validate() {
     die "schema file not found: $schema"
   fi
   tmp=$(mktemp "${TMPDIR:-/tmp}/cedar-policy.XXXXXX")
-  trap 'rm -f "$tmp"' EXIT INT TERM
-  chmod 600 "$tmp"
+  trap 'rm -f -- "$tmp"' EXIT INT TERM
+  chmod -- 600 "$tmp"
   if ! content=$(fetch_content "$NAME"); then
     fail_status "${NAME}: FETCH_ERROR"
   fi
   write_content "$tmp" "$content"
   printf 'Policy: %s  validate --schema %s\n' "$NAME" "$schema" >&2
-  if cedar validate --schema "$schema" --policies "$tmp" >&2; then
+  if cedar validate --schema="$schema" --policies="$tmp" >&2; then
     printf '%s: valid\n' "$NAME"
   else
     fail_status "${NAME}: INVALID"
@@ -237,8 +244,8 @@ run_scan() {
   fail_n=0
   error_n=0
   tmp=$(mktemp "${TMPDIR:-/tmp}/cedar-policy.XXXXXX")
-  trap 'rm -f "$tmp"' EXIT INT TERM
-  chmod 600 "$tmp"
+  trap 'rm -f -- "$tmp"' EXIT INT TERM
+  chmod -- 600 "$tmp"
   # here-doc so counters stay in this shell (a pipe would subshell them).
   while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
@@ -260,7 +267,7 @@ run_scan() {
       continue
     fi
     printf '%s' "$content" >"$tmp"
-    if cedar check-parse --policies "$tmp" >/dev/null 2>&1; then
+    if cedar check-parse --policies="$tmp" >/dev/null 2>&1; then
       printf '%-40s  OK\n' "$name" >&2
       ok_n=$((ok_n + 1))
     else
@@ -280,7 +287,57 @@ EOF
 # k8s verbs map to k8s::User / k8s::Action / k8s::Resource (RequestInfo + UserInfo).
 # Optional entities file supplies Group parents. HTML report is the readable view.
 trim() {
-  printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+  val=$1
+  val=${val#"${val%%[![:space:]]*}"}
+  val=${val%"${val##*[![:space:]]}"}
+  printf '%s' "$val"
+}
+
+has_leading_id_annotation() {
+  awk '
+    BEGIN { in_str = 0; found = 0 }
+    {
+      line = $0
+      len = length(line)
+      i = 1
+      while (i <= len) {
+        c = substr(line, i, 1)
+        if (in_str) {
+          if (c == "\\") { i += 2; continue }
+          if (c == "\"") { in_str = 0 }
+          i++
+          continue
+        }
+        if (c == "/" && substr(line, i, 2) == "//") {
+          break
+        }
+        if (c == "\"") {
+          in_str = 1
+          i++
+          continue
+        }
+        if (c == " " || c == "\t" || c == "\r") {
+          i++
+          continue
+        }
+        if (c == "@") {
+          rest = substr(line, i)
+          if (rest ~ /^@id[[:space:]]*\(/) {
+            found = 1
+            exit 0
+          }
+          i++
+          continue
+        }
+        rest = substr(line, i)
+        if (rest ~ /^(permit|forbid)([^A-Za-z0-9_]|$)/) {
+          exit 1
+        }
+        i++
+      }
+    }
+    END { exit(found ? 0 : 1) }
+  '
 }
 
 make_euid() {
@@ -431,10 +488,33 @@ for entity in entities:
     by_uid[key] = entity
     order.append(key)
 
+def parse_k8s_resource_path(eid):
+    parts = [p for p in eid.split("/") if p]
+    parsed = {"apiGroup": "", "namespace": "", "resource": "", "name": "", "subresource": ""}
+    if len(parts) >= 3 and parts[0] == "api":
+        rest = parts[2:]
+    elif len(parts) >= 4 and parts[0] == "apis":
+        parsed["apiGroup"] = parts[1]
+        rest = parts[3:]
+    else:
+        return parsed
+    if len(rest) >= 3 and rest[0] == "namespaces":
+        parsed["namespace"] = rest[1]
+        rest = rest[2:]
+    if len(rest) >= 1:
+        parsed["resource"] = rest[0]
+    if len(rest) >= 2:
+        parsed["name"] = rest[1]
+    if len(rest) >= 3:
+        parsed["subresource"] = "/".join(rest[2:])
+    return parsed
+
 for euid in euid_args:
     typ, eid = split_euid(euid)
     attrs = {}
-    if mode == "k8s":
+    key = (typ, eid)
+    existing_attrs = (by_uid[key].get("attrs") or {}) if key in by_uid else {}
+    if mode == "k8s" or typ.startswith("k8s::"):
         if typ == "k8s::User":
             attrs["name"] = eid
         elif typ == "k8s::ServiceAccount":
@@ -446,15 +526,23 @@ for euid in euid_args:
             prefix = "system:node:"
             attrs["name"] = eid[len(prefix):] if eid.startswith(prefix) else eid
         elif typ == "k8s::Resource":
-            attrs.update({"apiGroup": apigroup, "resource": resource_name})
-            if ns:
-                attrs["namespace"] = ns
-            if objname:
-                attrs["name"] = objname
-            if subresource:
-                attrs["subresource"] = subresource
+            parsed = parse_k8s_resource_path(eid)
+            eff_apigroup = apigroup if apigroup else parsed["apiGroup"]
+            eff_resource = resource_name if resource_name else parsed["resource"]
+            eff_ns = ns if ns else parsed["namespace"]
+            eff_obj = objname if objname else parsed["name"]
+            eff_sub = subresource if subresource else parsed["subresource"]
+            if eff_apigroup or "apiGroup" not in existing_attrs:
+                attrs["apiGroup"] = eff_apigroup
+            if eff_resource or "resource" not in existing_attrs:
+                attrs["resource"] = eff_resource
+            if eff_ns:
+                attrs["namespace"] = eff_ns
+            if eff_obj:
+                attrs["name"] = eff_obj
+            if eff_sub:
+                attrs["subresource"] = eff_sub
 
-    key = (typ, eid)
     if key in by_uid:
         current = by_uid[key]
         merged_attrs = dict(current.get("attrs") or {})
@@ -480,26 +568,26 @@ write_cani_report() {
   report=$1
   [ -f "$PLUGIN_HOME/cani_report.py" ] || return 1
   python3 "$PLUGIN_HOME/cani_report.py" \
-    --out "$report" \
-    --decision "$2" \
-    --principal-label "$3" \
-    --principal-euid "$4" \
-    --action-label "$5" \
-    --action-euid "$6" \
-    --resource-label "$7" \
-    --resource-euid "$8" \
-    --namespace "$9" \
-    --apigroup "${10}" \
-    --object-name "${11}" \
-    --mode "${12}" \
-    --context "${13}" \
-    --included "${14}" \
-    --skipped "${15}" \
-    --included-names "${16}" \
-    --policies-file "${17}" \
-    --entities-file "${18}" \
-    --authorize-log-file "${19}" \
-    --matrix-file "${20}"
+    --out="$report" \
+    --decision="$2" \
+    --principal-label="$3" \
+    --principal-euid="$4" \
+    --action-label="$5" \
+    --action-euid="$6" \
+    --resource-label="$7" \
+    --resource-euid="$8" \
+    --namespace="$9" \
+    --apigroup="${10}" \
+    --object-name="${11}" \
+    --mode="${12}" \
+    --context="${13}" \
+    --included="${14}" \
+    --skipped="${15}" \
+    --included-names="${16}" \
+    --policies-file="${17}" \
+    --entities-file="${18}" \
+    --authorize-log-file="${19}" \
+    --matrix-file="${20}"
 }
 
 open_cani_report() {
@@ -510,9 +598,13 @@ open_cani_report() {
     return 0
   fi
   if command -v open >/dev/null 2>&1; then
-    open "$report" || printf 'could not open report: %s\n' "$report" >&2
+    open -- "$report" || printf 'could not open report: %s\n' "$report" >&2
   elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$report" || printf 'could not open report: %s\n' "$report" >&2
+    case "$report" in
+      -*) xdg_target="./$report" ;;
+      *) xdg_target="$report" ;;
+    esac
+    xdg-open "$xdg_target" || printf 'could not open report: %s\n' "$report" >&2
   fi
   printf 'report: %s\n' "$report" >&2
 }
@@ -547,6 +639,7 @@ run_can_i() {
       ;;
   esac
   case "$resource_raw" in
+    k8s::*) mode=k8s ;;
     *::*) mode=cedar ;;
     [A-Z]*/*) mode=cedar ;;
   esac
@@ -563,10 +656,22 @@ run_can_i() {
   if [ "$mode" = k8s ]; then
     principal=$(normalize_k8s_principal "$principal_raw")
     action=$(normalize_euid 'k8s::Action' "$action_raw")
-    parse_k8s_resource "$resource_raw" "$ns" "$apigroup" "$apiversion" "$CANI_OBJECT_NAME"
-    resource=$K8S_RESOURCE_EUID
-    objname=$K8S_OBJECT_NAME
-    r_label=$(resource_plural_label "$resource_raw")
+    case "$resource_raw" in
+      k8s::*)
+        resource=$(normalize_euid 'k8s::Resource' "$resource_raw")
+        K8S_RESOURCE_NAME=""
+        K8S_SUBRESOURCE=""
+        objname=$CANI_OBJECT_NAME
+        r_label=${resource_raw##*::}
+        r_label=$(printf '%s' "$r_label" | tr -d '"')
+        ;;
+      *)
+        parse_k8s_resource "$resource_raw" "$ns" "$apigroup" "$apiversion" "$CANI_OBJECT_NAME"
+        resource=$K8S_RESOURCE_EUID
+        objname=$K8S_OBJECT_NAME
+        r_label=$(resource_plural_label "$resource_raw")
+        ;;
+    esac
   else
     principal=$(normalize_euid User "$principal_raw")
     action=$(normalize_euid Action "$action_raw")
@@ -585,11 +690,12 @@ run_can_i() {
   [ -z "$context_in" ] || [ -f "$context_in" ] || die "context file not found: $context_in"
 
   work=$(mktemp -d "${TMPDIR:-/tmp}/cedar-cani.XXXXXX")
-  trap 'rm -rf "$work"' EXIT INT TERM
+  trap 'rm -rf -- "$work"' EXIT INT TERM
   pol="$work/policies.cedar"
   ent="$work/entities.json"
   ctx="$work/context.json"
   out="$work/authorize.out"
+  err="$work/authorize.err"
   matrix="$work/matrix.json"
   aggregate_out="$work/aggregate.out"
   : >"$pol"
@@ -601,7 +707,7 @@ run_can_i() {
   skipped=0
   tmp="$work/candidate.cedar"
   : >"$tmp"
-  chmod 600 "$tmp"
+  chmod -- 600 "$tmp"
   while IFS= read -r name || [ -n "$name" ]; do
     [ -n "$name" ] || continue
     n=$((n + 1))
@@ -622,15 +728,23 @@ run_can_i() {
       continue
     fi
     printf '%s' "$content" >"$tmp"
-    if ! cedar check-parse --policies "$tmp" >/dev/null 2>&1; then
+    if ! cedar check-parse --policies="$tmp" >/dev/null 2>&1; then
       skipped=$((skipped + 1))
       printf '%s: PARSE_FAIL\n' "$name" >&2
       continue
     fi
-    if printf '%s' "$content" | grep -Eq '^[[:space:]]*@id\('; then
+    if printf '%s\n' "$content" | has_leading_id_annotation; then
       printf '%s\n' "$content" >>"$pol"
     else
-      printf '@id("%s")\n%s\n' "$name" "$content" >>"$pol"
+      case "$name" in
+        *\\* | *\"*)
+          escaped_name=$(printf '%s' "$name" | sed 's/\\/\\\\/g; s/"/\\"/g')
+          ;;
+        *)
+          escaped_name=$name
+          ;;
+      esac
+      printf '@id("%s")\n%s\n' "$escaped_name" "$content" >>"$pol"
     fi
     included=$((included + 1))
     if [ -n "$included_names" ]; then
@@ -645,8 +759,8 @@ EOF
     die "can-i: INDETERMINATE (${skipped} policy source(s) unavailable)"
   fi
 
-  if ! cedar check-parse --policies "$pol" >"$aggregate_out" 2>&1; then
-    cat "$aggregate_out" >&2
+  if ! cedar check-parse --policies="$pol" >"$aggregate_out" 2>&1; then
+    cat -- "$aggregate_out" >&2
     die "can-i: INDETERMINATE (combined policy set is invalid)"
   fi
 
@@ -661,25 +775,28 @@ EOF
     die "can-i: INDETERMINATE (invalid entities)"
   fi
   if [ -n "$context_in" ]; then
-    cp "$context_in" "$ctx"
+    cp -- "$context_in" "$ctx"
   else
     printf '{}\n' >"$ctx"
   fi
-  chmod 600 "$ctx"
+  chmod -- 600 "$ctx"
 
-  set -- authorize -v --policies "$pol" --entities "$ent" --context "$ctx" \
-    --principal "$principal" --action "$action" --resource "$resource"
+  set -- authorize -v --policies="$pol" --entities="$ent" --context="$ctx" \
+    --principal="$principal" --action="$action" --resource="$resource"
   if [ -n "$schema" ]; then
-    set -- "$@" --schema "$schema"
+    set -- "$@" --schema="$schema"
   fi
 
   set +e
-  cedar "$@" >"$out" 2>&1
+  cedar "$@" >"$out" 2>"$err"
   rc=$?
   set -e
-  cat "$out" >&2
+  cat -- "$out" >&2
+  if [ -s "$err" ]; then
+    cat -- "$err" >&2
+  fi
 
-  if grep -q '^error while evaluating policy' "$out"; then
+  if [ -s "$err" ] || grep -q '^error while evaluating policy' "$out"; then
     die "can-i: INDETERMINATE (policy evaluation error)"
   fi
   decision=$(awk '/^ALLOW$/{print "ALLOW"; exit} /^DENY$/{print "DENY"; exit}' "$out")
@@ -701,25 +818,30 @@ EOF
     matrix_json="["
     first=1
     matrix_out="$work/matrix-authorize.out"
+    matrix_err="$work/matrix-authorize.err"
     for verb in get list watch create update patch delete; do
-      verb_euid=$(normalize_euid 'k8s::Action' "$verb")
-      set -- authorize --policies "$pol" --entities "$ent" --context "$ctx" \
-        --principal "$principal" --action "$verb_euid" --resource "$resource"
-      if [ -n "$schema" ]; then
-        set -- "$@" --schema "$schema"
-      fi
-      set +e
-      cedar "$@" >"$matrix_out" 2>&1
-      mrc=$?
-      set -e
-      if grep -q '^error while evaluating policy' "$matrix_out"; then
-        mdec=ERROR
+      verb_euid="k8s::Action::\"${verb}\""
+      if [ "$action" = "$verb_euid" ]; then
+        mdec=$decision
       else
-        case "$mrc" in
-          0) mdec=ALLOW ;;
-          2) mdec=DENY ;;
-          *) mdec=ERROR ;;
-        esac
+        set -- authorize --policies="$pol" --entities="$ent" --context="$ctx" \
+          --principal="$principal" --action="$verb_euid" --resource="$resource"
+        if [ -n "$schema" ]; then
+          set -- "$@" --schema="$schema"
+        fi
+        set +e
+        cedar "$@" >"$matrix_out" 2>"$matrix_err"
+        mrc=$?
+        set -e
+        if [ -s "$matrix_err" ] || grep -q '^error while evaluating policy' "$matrix_out"; then
+          mdec=ERROR
+        else
+          mdec=$(awk '/^ALLOW$/{print "ALLOW"; exit} /^DENY$/{print "DENY"; exit}' "$matrix_out")
+          case "$mrc:$mdec" in
+            0:ALLOW | 2:DENY) ;;
+            *) mdec=ERROR ;;
+          esac
+        fi
       fi
       if [ "$first" -eq 1 ]; then
         first=0

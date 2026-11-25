@@ -9,11 +9,26 @@ DIR="${CEDAR_MOCK_DIR:?CEDAR_MOCK_DIR is required}"
 jsonpath=""
 resource=""
 name=""
+after_dd=0
 while [ $# -gt 0 ]; do
+  if [ "$after_dd" -eq 1 ]; then
+    if [ -z "$name" ]; then
+      name=$1
+    fi
+    shift
+    continue
+  fi
   case "$1" in
+    --)
+      after_dd=1
+      shift
+      ;;
     --kubeconfig | --context)
       shift
       [ $# -gt 0 ] || exit 2
+      shift
+      ;;
+    --kubeconfig=* | --context=*)
       shift
       ;;
     get)
@@ -21,7 +36,7 @@ while [ $# -gt 0 ]; do
       [ $# -gt 0 ] || exit 2
       resource=$1
       shift
-      if [ $# -gt 0 ] && [ "$1" != "-o" ]; then
+      if [ $# -gt 0 ] && [ "$1" != "-o" ] && [ "$1" != "--" ]; then
         name=$1
         shift
       fi

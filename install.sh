@@ -18,10 +18,16 @@ DEST=$(printf '%s' "$DEST" | sed 's|//*|/|g')
 PLUGIN_DIR="$DEST/plugins/cedar"
 PLUGIN_SH="$PLUGIN_DIR/plugin.sh"
 
+PLUGIN_YAML_TMP=""
+cleanup() {
+  [ -z "$PLUGIN_YAML_TMP" ] || rm -f -- "$PLUGIN_YAML_TMP"
+}
+trap cleanup EXIT INT TERM
+
 mkdir -p "$PLUGIN_DIR" "$DEST/plugins"
-cp "$ROOT/plugin.sh" "$PLUGIN_SH"
-chmod 755 "$PLUGIN_SH"
-cp "$ROOT/cani_report.py" "$PLUGIN_DIR/cani_report.py"
+cp -- "$ROOT/plugin.sh" "$PLUGIN_SH"
+chmod -- 755 "$PLUGIN_SH"
+cp -- "$ROOT/cani_report.py" "$PLUGIN_DIR/cani_report.py"
 
 # k9s loads *.yaml from plugins/ (and nested dirs). Keep defs at plugins/cedar.yaml.
 PLUGIN_SH_YAML=$(python3 - "$PLUGIN_SH" <<'PY'
@@ -32,11 +38,13 @@ PY
 PLUGIN_SH_SED=$(printf '%s' "$PLUGIN_SH_YAML" | sed -e 's/[\\&]/\\&/g' -e 's/|/\\|/g')
 PLUGIN_YAML_TMP=$(mktemp "$DEST/plugins/.cedar.yaml.XXXXXX")
 sed "s|command: PLUGIN_SH|command: $PLUGIN_SH_SED|" "$ROOT/k9s/plugins.yaml" >"$PLUGIN_YAML_TMP"
-mv -f "$PLUGIN_YAML_TMP" "$DEST/plugins/cedar.yaml"
+mv -f -- "$PLUGIN_YAML_TMP" "$DEST/plugins/cedar.yaml"
+PLUGIN_YAML_TMP=""
 
 VIEWS="$DEST/views.yaml"
 VIEW_KEY="cedar.k8s.aws/v1alpha1/policies"
-if [ -f "$VIEWS" ] && grep -Eq "^[[:space:]]{2}${VIEW_KEY}:([[:space:]]|$)" "$VIEWS"; then
+VIEW_KEY_RE='cedar\.k8s\.aws/v1alpha1/policies'
+if [ -f "$VIEWS" ] && grep -Eq "^[[:space:]]{2}${VIEW_KEY_RE}:([[:space:]]|$)" "$VIEWS"; then
   printf 'views.yaml already has %s\n' "$VIEW_KEY"
 elif [ ! -s "$VIEWS" ]; then
   printf 'views:\n  cedar.k8s.aws/v1alpha1/policies:\n    columns:\n      - NAME\n      - ENFORCED:.spec.validation.enforced\n      - VALMODE:.spec.validation.validationMode\n      - AGE\n' >"$VIEWS"
