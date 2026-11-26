@@ -794,10 +794,12 @@ forbid (
 EOF
   CEDAR_MOCK_DIR="$K8S_EUID_DIR"
   CEDAR_PRINCIPAL=alice
-  CEDAR_ACTION=get
+  CEDAR_ACTION="get"
+  # shellcheck disable=SC2089
   CEDAR_RESOURCE='k8s::Resource::"/api/v1/namespaces/kube-system/secrets"'
   CEDAR_K9S_REPORT="$TEST_TMP/cani-k8s-euid.html"
   unset CEDAR_NAMESPACE CEDAR_APIGROUP CEDAR_SCHEMA
+  # shellcheck disable=SC2090
   export CEDAR_MOCK_DIR CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE CEDAR_K9S_REPORT
   if "$ROOT/plugin.sh" can-i >"$TEST_TMP/cedar-plugin-k8s-euid.out" 2>&1 && \
      grep -q '^DENY ' "$TEST_TMP/cedar-plugin-k8s-euid.out" && \
@@ -823,7 +825,7 @@ permit (
 EOF
   CEDAR_MOCK_DIR="$FAKE_ID_DIR"
   CEDAR_PRINCIPAL=alice
-  CEDAR_ACTION=get
+  CEDAR_ACTION="get"
   CEDAR_RESOURCE=pods
   CEDAR_K9S_REPORT="$TEST_TMP/cani-fake-id.html"
   export CEDAR_MOCK_DIR CEDAR_PRINCIPAL CEDAR_ACTION CEDAR_RESOURCE CEDAR_K9S_REPORT
